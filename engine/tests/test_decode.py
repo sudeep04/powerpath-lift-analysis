@@ -183,14 +183,51 @@ def test_decode_error_on_missing_file(tmp_path) -> None:
 
 
 def test_decode_error_on_stream_with_no_video(tmp_path) -> None:
-    path = tmp_path / "audio_only.wav"
+    """The fixture must be a container the format whitelist ACCEPTS (m4a is
+    mp4-family) so this genuinely exercises the "no video stream" branch --
+    a non-whitelisted extension (e.g. .wav) would be rejected at open time
+    instead. The `match` pins the error to the right branch so the test
+    can't silently regress into covering the whitelist rejection.
+    """
+    path = tmp_path / "audio_only.m4a"
     write_audio_only_test_file(path)
 
-    with pytest.raises(DecodeError):
+    with pytest.raises(DecodeError, match="no video stream"):
         probe(path)
 
-    with pytest.raises(DecodeError):
+    with pytest.raises(DecodeError, match="no video stream"):
         list(frames(path))
+
+
+def test_decode_error_when_first_frame_has_no_pts(tmp_path, monkeypatch) -> None:
+    """PTS timebase constraint: a stream whose FIRST frame carries no pts
+    has no usable timebase, and frames() must refuse (DecodeError) rather
+    than fabricate frame-index timestamps. PyAV can't cheaply encode a
+    pts-less file, so this stubs `av.open` with a minimal fake container
+    that hands back one pts-less frame.
+    """
+
+    class FakeFrame:
+        pts = None
+
+    class FakeStreams:
+        video = ("fake-video-stream",)
+
+    class FakeContainer:
+        streams = FakeStreams()
+
+        def decode(self, stream):
+            yield FakeFrame()
+
+        def close(self):
+            pass
+
+    import powerpath_engine.decode as decode_module
+
+    monkeypatch.setattr(decode_module.av, "open", lambda *args, **kwargs: FakeContainer())
+
+    with pytest.raises(DecodeError, match="no pts"):
+        list(frames(tmp_path / "irrelevant.mp4"))
 
 
 # ---------------------------------------------------------------------------

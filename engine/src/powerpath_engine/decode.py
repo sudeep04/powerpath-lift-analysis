@@ -37,12 +37,6 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Fallback average fps used only when a stream reports none of average_rate/
-# guessed_rate AND every frame lacks a usable pts (see `frames()`) -- chosen
-# as a plausible default rather than left undefined, but this path is not
-# expected to be hit by real device footage.
-_DEFAULT_FALLBACK_FPS = 30.0
-
 # FFmpeg's demuxer autodetection is over-eager for a few formats that have
 # no real magic-byte signature -- most notably "tty" (an ANSI-art/terminal
 # capture format), which happily decodes an arbitrary plain-text file as a
@@ -151,14 +145,15 @@ def frames(path: str | Path) -> Iterator[DecodedFrame]:
     the whole video is never materialized (the streaming single-pass global
     constraint).
 
-    `t` is `float(frame.pts * stream.time_base)` seconds. A frame whose
-    `pts` is `None` is skipped and counted, UNLESS it is the very first
-    decoded frame -- seeing no pts on frame zero means this stream has no
-    usable timebase at all, so every frame (including that first one)
-    instead gets `t = decode_order_index / fps_avg` (`fps_avg` from the
-    stream, or `_DEFAULT_FALLBACK_FPS` if that too is unavailable), logged
-    once as a warning. This is a rare defensive fallback, not expected for
-    real device footage (PyAV/FFmpeg populate pts for ordinary streams).
+    `t` is `float(frame.pts * stream.time_base)` seconds -- the PTS
+    timebase global constraint means there is deliberately NO frame-index
+    fallback clock in this module. A frame whose `pts` is `None` mid-stream
+    is skipped (counted and logged once at the end) because its `t` cannot
+    be trusted; if the very FIRST decoded frame has no pts, the stream has
+    no usable timebase at all and a `DecodeError` is raised rather than
+    inventing index-based timestamps for a (possibly variable frame rate)
+    video. Real device footage always carries pts, so neither path is
+    expected outside corrupt/exotic input.
 
     Rotation: each frame's own `.rotation` is read and applied via
     `np.rot90` so the yielded image is always upright; see the module
@@ -173,31 +168,24 @@ def frames(path: str | Path) -> Iterator[DecodedFrame]:
 
         none_pts_count = 0
         yielded = 0
-        fallback_fps: float | None = None
 
         try:
             for decode_index, frame in enumerate(container.decode(stream)):
                 if frame.pts is None:
-                    none_pts_count += 1
                     if decode_index == 0:
-                        fallback_fps = _average_fps(stream) or _DEFAULT_FALLBACK_FPS
-                        logger.warning(
-                            "%s: no pts on the first decoded frame; falling back to "
-                            "index/fps_avg=%.3f for every frame's t",
-                            path,
-                            fallback_fps,
+                        # No pts on frame zero means the stream carries no
+                        # usable timebase; refuse rather than fabricate
+                        # frame-index timestamps (PTS timebase constraint).
+                        raise DecodeError(
+                            f"{path}: first frame has no pts; stream has no usable timebase"
                         )
-                    if fallback_fps is None:
-                        # An isolated later frame missing pts in an
-                        # otherwise-timestamped stream: its t cannot be
-                        # trusted, so drop it rather than guess.
-                        continue
-                    t = decode_index / fallback_fps
-                elif fallback_fps is not None:
-                    t = decode_index / fallback_fps
-                else:
-                    t = float(frame.pts * stream.time_base)
+                    # An isolated later frame missing pts in an otherwise-
+                    # timestamped stream: its t cannot be trusted, so drop
+                    # it rather than guess.
+                    none_pts_count += 1
+                    continue
 
+                t = float(frame.pts * stream.time_base)
                 rotation_deg = _normalize_rotation_deg(frame.rotation)
                 image = _apply_rotation(frame.to_ndarray(format="bgr24"), rotation_deg)
 
@@ -206,7 +194,7 @@ def frames(path: str | Path) -> Iterator[DecodedFrame]:
         except av.error.FFmpegError as exc:
             raise DecodeError(f"{path}: decode failed after {yielded} frame(s): {exc}") from exc
 
-        if none_pts_count and fallback_fps is None:
+        if none_pts_count:
             logger.warning("%s: skipped %d frame(s) with no pts", path, none_pts_count)
     finally:
         container.close()

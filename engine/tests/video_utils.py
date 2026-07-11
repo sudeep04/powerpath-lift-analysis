@@ -72,13 +72,19 @@ def write_audio_only_test_file(path: str | Path) -> None:
     exercise `decode.py`'s "no video stream" `DecodeError` path with a file
     PyAV can genuinely open (unlike a text file, which should fail to open
     at all).
+
+    `path` must carry an extension whose container `decode.py`'s format
+    whitelist accepts (e.g. `.m4a` -- AAC in an mp4-family container);
+    otherwise the test would trip the whitelist rejection in `_open()`
+    instead of the `no video stream` branch it is meant to cover.
     """
     container = av.open(str(path), mode="w")
     try:
-        stream = container.add_stream("pcm_s16le", rate=8000)
-        samples = np.zeros((1, 1600), dtype=np.int16)  # 800 interleaved stereo samples
+        stream = container.add_stream("aac", rate=44100)
+        # 2048 interleaved stereo samples of silence (one AAC frame's worth).
+        samples = np.zeros((1, 2048 * 2), dtype=np.int16)
         frame = av.AudioFrame.from_ndarray(samples, format="s16", layout="stereo")
-        frame.sample_rate = 8000
+        frame.sample_rate = 44100
         for packet in stream.encode(frame):
             container.mux(packet)
         for packet in stream.encode():
