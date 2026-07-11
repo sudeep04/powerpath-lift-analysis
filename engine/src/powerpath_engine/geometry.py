@@ -22,6 +22,12 @@ from dataclasses import dataclass
 # bar-plane px->cm scale from a detected plate radius/diameter in pixels.
 STANDARD_PLATE_DIAMETER_CM = 45.0
 
+# Standard barbell sleeve diameter, in cm (50mm). The bar-end marker dot/ring
+# covers the end cap, whose face matches the sleeve diameter, so a measured
+# marker diameter in px yields an independent bar-plane scale estimate --
+# used by calibration as a sanity cross-check against the plate scale.
+BAR_SLEEVE_DIAMETER_CM = 5.0
+
 
 @dataclass(frozen=True)
 class PlaneScale:
@@ -58,6 +64,23 @@ def bar_plane_scale_from_plate(plate_diameter_px: float) -> PlaneScale:
             f"plate_diameter_px must be a positive finite number, got {plate_diameter_px!r}"
         )
     return PlaneScale(cm_per_px=STANDARD_PLATE_DIAMETER_CM / plate_diameter_px)
+
+
+def bar_plane_scale_from_sleeve(marker_diameter_px: float) -> PlaneScale:
+    """Derive a bar-plane scale from the measured marker diameter in pixels.
+
+    The marker dot/ring is taped over the bar's end cap, which shares the
+    standard 50mm (5.0cm) sleeve diameter -- so the marker's apparent
+    diameter gives a second, plate-independent estimate of the bar-plane
+    scale. Calibration uses it only as a cross-check; the plate remains the
+    primary reference (a 450mm plate spans ~9x more pixels than the end
+    cap, so its relative measurement error is far smaller).
+    """
+    if not (marker_diameter_px > 0.0) or not math.isfinite(marker_diameter_px):
+        raise ValueError(
+            f"marker_diameter_px must be a positive finite number, got {marker_diameter_px!r}"
+        )
+    return PlaneScale(cm_per_px=BAR_SLEEVE_DIAMETER_CM / marker_diameter_px)
 
 
 def body_plane_scale_from_height(athlete_height_cm: float, athlete_height_px: float) -> PlaneScale:

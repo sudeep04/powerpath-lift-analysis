@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 from powerpath_engine.geometry import (
     PlaneScale,
     bar_plane_scale_from_plate,
+    bar_plane_scale_from_sleeve,
     body_plane_scale_from_height,
     from_y_up,
     horizontal_deviation_cm,
@@ -82,6 +83,20 @@ def test_bar_plane_scale_from_plate_sanity() -> None:
 def test_bar_plane_scale_from_plate_rejects_non_positive() -> None:
     with pytest.raises(ValueError):
         bar_plane_scale_from_plate(0.0)
+
+
+def test_bar_plane_scale_from_sleeve_sanity() -> None:
+    """A 50px marker diameter (50mm sleeve/end cap) implies 1.0 mm/px == 0.1 cm/px."""
+    scale = bar_plane_scale_from_sleeve(50.0)
+    assert scale.cm_per_px == pytest.approx(0.1)
+    assert scale.px_to_cm(50.0) == pytest.approx(5.0)
+
+
+def test_bar_plane_scale_from_sleeve_rejects_non_positive() -> None:
+    with pytest.raises(ValueError):
+        bar_plane_scale_from_sleeve(0.0)
+    with pytest.raises(ValueError):
+        bar_plane_scale_from_sleeve(-10.0)
 
 
 def test_body_plane_scale_from_height_sanity() -> None:
