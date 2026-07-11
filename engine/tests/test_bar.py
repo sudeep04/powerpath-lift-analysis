@@ -7,8 +7,6 @@ synthetic markers with OpenCV -- no real footage, no model inference.
 
 from __future__ import annotations
 
-import math
-
 import cv2
 import numpy as np
 import pytest
@@ -118,12 +116,39 @@ def test_detect_marker_roi_restricts_search_and_maps_back_to_full_frame() -> Non
     assert sample.y == pytest.approx(100.0, abs=0.5)
 
 
-def test_detect_marker_default_spec_rejects_red() -> None:
-    """The default hue range deliberately stops below the 180/0 red wrap:
-    a saturated red blob (hue ~0) must NOT match the magenta marker spec."""
+@pytest.mark.parametrize(
+    ("name", "bgr"),
+    [
+        ("pure red (H=0, above the wrap)", (0, 0, 255)),
+        ("crimson (H=172, below the wrap)", (60, 0, 220)),
+        ("boundary red (H=177, below the wrap)", (20, 0, 230)),
+    ],
+)
+def test_detect_marker_default_spec_rejects_red_family(name: str, bgr: tuple) -> None:
+    """Red straddles the OpenCV 180/0 hue wrap: pure red at H~0 AND
+    crimson-leaning reds at H~171-179. The default range must reject BOTH
+    sides -- the below-wrap side is why the hue cap is 170, not 179."""
     frame = gray_frame()
-    cv2.circle(frame, (150, 100), 12, (0, 0, 255), -1)  # BGR red
-    assert detect_marker(frame, MarkerSpec()) is None
+    cv2.circle(frame, (150, 100), 12, bgr, -1)
+    assert detect_marker(frame, MarkerSpec()) is None, f"{name} must not match the marker spec"
+
+
+@pytest.mark.parametrize(
+    ("name", "bgr"),
+    [
+        ("magenta (H=150)", (255, 0, 255)),
+        ("deep pink (H=164)", (147, 20, 255)),
+        ("hot pink (H=165)", (180, 105, 255)),
+    ],
+)
+def test_detect_marker_default_spec_accepts_pink_family(name: str, bgr: tuple) -> None:
+    """The 170 hue cap must not over-tighten: the whole pink/magenta tape
+    family (H ~150-165) stays inside the default range."""
+    frame = gray_frame()
+    cv2.circle(frame, (150, 100), 12, bgr, -1)
+    sample = detect_marker(frame, MarkerSpec())
+    assert sample is not None, f"{name} must match the marker spec"
+    assert sample.x == pytest.approx(150.0, abs=0.5)
 
 
 def test_detect_marker_visibility_is_area_ratio_clamped() -> None:
@@ -239,17 +264,18 @@ def test_tracker_visibility_ratio_against_last_confident_area() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _detection(area_px: float) -> MarkerDetection:
+def _detection(w: int, h: int) -> MarkerDetection:
     return MarkerDetection(
         sample=Sample(t=0.0, x=0.0, y=0.0, visibility=1.0),
-        area_px=area_px,
-        bbox=Rect(x=0, y=0, w=1, h=1),
+        area_px=float(w * h),
+        bbox=Rect(x=0, y=0, w=w, h=h),
     )
 
 
-def test_estimate_marker_diameter_px_is_median_equivalent_diameter() -> None:
-    areas = [math.pi * (d / 2.0) ** 2 for d in (20.0, 22.0, 24.0)]
-    detections = [_detection(a) for a in areas]
+def test_estimate_marker_diameter_px_is_median_bbox_extent() -> None:
+    # Extents (max of w, h): 20, 22, 24 -> median 22. The (24, 20) case
+    # also pins that the LARGER bbox side wins (one-axis clipping).
+    detections = [_detection(20, 19), _detection(21, 22), _detection(24, 20)]
     assert estimate_marker_diameter_px(detections) == pytest.approx(22.0)
 
 
@@ -262,9 +288,22 @@ def test_tracker_detections_feed_diameter_estimate() -> None:
     tracker = MarkerTracker()
     for i in range(5):
         assert tracker.feed(i / 30.0, marker_frame((150 + 5 * i, 100))) is not None
-    # A rasterized radius-12 dot covers ~441px -> equivalent diameter ~23.7.
+    # A rasterized radius-12 dot spans 25px (-12..+12 inclusive).
     diameter = estimate_marker_diameter_px(tracker.detections)
-    assert diameter == pytest.approx(2.0 * math.sqrt(441.0 / math.pi), abs=1.5)
+    assert diameter == pytest.approx(25.0, abs=1.0)
+
+
+def test_estimate_marker_diameter_px_ring_marker_reads_outer_diameter() -> None:
+    """The marker spec permits a RING, not just a dot. An area-equivalent
+    diameter would badly under-read an annulus's outer diameter; the bbox
+    extent must recover it within a few percent."""
+    tracker = MarkerTracker()
+    for i in range(3):
+        frame = gray_frame()
+        cv2.circle(frame, (320, 240), 32, MAGENTA_BGR, 5)  # ring, outer span 71px
+        assert tracker.feed(i / 30.0, frame) is not None
+    diameter = estimate_marker_diameter_px(tracker.detections)
+    assert diameter == pytest.approx(71.0, rel=0.03)
 
 
 # ---------------------------------------------------------------------------

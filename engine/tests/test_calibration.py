@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
+from powerpath_engine.bar import MarkerTracker, estimate_marker_diameter_px
 from powerpath_engine.calibration import (
     MAX_MARKER_DISAGREEMENT,
     PLAUSIBLE_MM_PER_PX,
@@ -160,6 +161,25 @@ def test_calibrate_cross_check_passes_when_marker_agrees() -> None:
     frames = [plate_frame((960, 560), 300) for _ in range(3)]
     # 50mm / 66.7px = 0.7496 mm/px, in agreement with the ~0.75 plate scale.
     result = calibrate(frames, date_fallback=None, manual=None, marker_diameter_px=66.7)
+    assert result.source == "plate"
+    assert result.warning is None
+
+
+def test_calibrate_cross_check_passes_with_ring_marker_end_to_end() -> None:
+    """Ring markers are explicitly permitted (centered dot OR ring). The
+    tracked ring's estimated OUTER diameter must agree with a correct
+    plate scale -- an area-based diameter estimate would under-read the
+    ring, bias the sleeve scale high, and false-reject this calibration."""
+    tracker = MarkerTracker()
+    for i in range(5):
+        frame = np.full((480, 640, 3), BG_LEVEL, dtype=np.uint8)
+        cv2.circle(frame, (320, 240), 32, (255, 0, 255), 5)  # magenta ring, outer span 71px
+        assert tracker.feed(i / 30.0, frame) is not None
+    marker_diameter = estimate_marker_diameter_px(tracker.detections)
+    # Ring: 50mm / ~71px = ~0.70 mm/px, within 20% of the ~0.75 plate scale.
+
+    frames = [plate_frame((960, 560), 300) for _ in range(3)]
+    result = calibrate(frames, date_fallback=None, manual=None, marker_diameter_px=marker_diameter)
     assert result.source == "plate"
     assert result.warning is None
 

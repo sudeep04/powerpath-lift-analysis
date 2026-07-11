@@ -22,7 +22,6 @@ y-flip; nothing here touches scale factors.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import median
@@ -82,21 +81,26 @@ class MarkerSpec:
     """Inclusive HSV threshold range (OpenCV convention) for the marker tape.
 
     The default targets saturated pink/magenta gaffer tape. OpenCV hue runs
-    over [0, 180): magenta sits at ~150 and deep pink at ~165, so the whole
-    pink/magenta family fits in a single [140, 179] range that stops just
-    BELOW the 180->0 hue wrap. That is a deliberate choice, not an
-    oversight: crossing the wrap would require a two-range threshold whose
-    only additional catch is saturated RED (hue ~178-182 wrapped) -- and
-    red is the single most common strong color in a gym (plates, shirts,
-    equipment), exactly what the marker must never be confused with. Users
-    are told to use pink/magenta tape, not red, for the same reason.
+    over [0, 180): the pink/magenta family measures ~150 (magenta) to ~165
+    (deep/hot pink), while the RED family straddles the 180->0 hue wrap --
+    crimson-leaning reds sit at ~171-179 below the wrap (crimson
+    BGR(60,0,220) measures H=172) and pure red at ~0-10 above it. Red is
+    the single most common strong color in a gym (plates, shirts,
+    equipment), exactly what the marker must never be confused with, so
+    the default range [140, 170] deliberately excludes red from BOTH
+    directions: the high cap at 170 stays under the crimson-to-red band
+    (cv2.inRange bounds are inclusive, so a cap of 172+ would re-admit
+    crimson) while leaving 5 hue units of headroom above real tape, and
+    the low bound at 140 keeps wrapped red (H ~0-10) out without needing a
+    two-range threshold across the wrap. Users are told to use
+    pink/magenta tape, not red, for the same reason.
 
     S/V floors of 100 reject washed-out pinkish walls and dim shadows while
     accepting real tape under normal gym lighting.
     """
 
     hsv_low: tuple[int, int, int] = (140, 100, 100)
-    hsv_high: tuple[int, int, int] = (179, 255, 255)
+    hsv_high: tuple[int, int, int] = (170, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -199,19 +203,24 @@ class MarkerTracker:
 
 
 def estimate_marker_diameter_px(samples: Sequence[MarkerDetection]) -> float:
-    """Apparent marker diameter in px, from a run of tracker detections.
+    """Apparent marker OUTER diameter in px, from a run of tracker detections.
 
-    Each detection's blob area is converted to its equivalent-circle
-    diameter (2 * sqrt(area / pi)); the median over all detections is
-    returned, so up to half the frames can be partially occluded or noisy
-    without moving the estimate. Used for the calibration sanity
-    cross-check against the 50mm bar sleeve (see
+    Each detection contributes its bbox extent (max of width/height); the
+    median over all detections is returned. The bbox -- not an
+    area-equivalent diameter -- is the right measure because the marker
+    spec permits a centered dot OR a ring: an annulus's area badly
+    under-reads its outer diameter, which would bias the sleeve
+    cross-check scale high and false-reject correct plate calibrations,
+    while the bbox spans the outer edge identically for both shapes.
+    max(w, h) tolerates clipping along one axis; the median tolerates up
+    to half the frames being partially occluded or noisy. Used for the
+    calibration sanity cross-check against the 50mm bar sleeve (see
     geometry.bar_plane_scale_from_sleeve). Raises ValueError on an empty
     sequence -- there is no meaningful diameter to report.
     """
     if not samples:
         raise ValueError("estimate_marker_diameter_px requires at least one detection")
-    return float(median(2.0 * math.sqrt(d.area_px / math.pi) for d in samples))
+    return float(median(float(max(d.bbox.w, d.bbox.h)) for d in samples))
 
 
 def _visibility(area_px: float, expected_area: float | None) -> float:
