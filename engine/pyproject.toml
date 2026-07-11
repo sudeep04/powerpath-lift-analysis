@@ -14,6 +14,13 @@ dependencies = [
     "scipy>=1.18.0",
 ]
 
+# Optional pose-inference extras -- imported LAZILY inside the backend
+# __init__s; the test suite must pass with neither installed (the global
+# "no model inference in the test suite" constraint).
+[project.optional-dependencies]
+pose = ["rtmlib", "onnxruntime"]
+mediapipe = ["mediapipe"]
+
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12.0"]
 build-backend = "uv_build"
