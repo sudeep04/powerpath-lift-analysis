@@ -9,10 +9,17 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "av>=18.0.0",
+    "fastapi>=0.139.0",
     "numpy>=2.5.1",
     "opencv-python>=5.0.0.93",
+    "python-multipart>=0.0.32",
     "scipy>=1.18.0",
+    "uvicorn>=0.51.0",
 ]
+
+[project.scripts]
+# Uvicorn entry: serves the FastAPI app on 127.0.0.1:8400 (see api/main.py).
+powerpath-api = "powerpath_engine.api.main:run"
 
 # Optional pose-inference extras -- imported LAZILY inside the backend
 # __init__s; the test suite must pass with neither installed (the global
@@ -27,6 +34,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "hypothesis>=6.156.6",
     "pytest>=9.1.1",
     "ruff>=0.15.21",
