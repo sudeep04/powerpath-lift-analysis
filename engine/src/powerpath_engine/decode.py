@@ -86,8 +86,9 @@ class DecodedFrame:
     `t` is PTS seconds (see module docstring) -- the only thing downstream
     code should key on. `index` is a plain 0-based count of *yielded*
     frames (frames skipped for missing/unusable pts, see `frames()`, are
-    not counted here); it exists for progress reporting only and must never
-    be used as a time axis.
+    not counted here); it exists for progress reporting and for stride
+    gating (pose.StridedPose runs its backend every Nth yielded frame)
+    and must never be used as a time axis.
     """
 
     t: float

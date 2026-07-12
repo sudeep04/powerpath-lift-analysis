@@ -21,6 +21,7 @@ from powerpath_engine.pose import (
     COCO17_LANDMARK_NAMES,
     MEDIAPIPE_LANDMARK_INDICES,
     MIN_LANDMARK_SCORE,
+    AthleteLock,
     BBox,
     FakePoseBackend,
     MediaPipeBackend,
@@ -201,6 +202,49 @@ def test_select_person_rejects_empty_candidates() -> None:
         select_person([], None)
 
 
+def test_athlete_lock_holds_across_full_frame_to_crop_transition() -> None:
+    """Regression: a full-frame hit followed by a cropped call whose decoy
+    (spotter inside the padded crop) sits NEARER the stale full-frame
+    coordinates than the athlete does in raw crop space. The lock keeps
+    its bbox in full-frame px and translates crop candidates by the crop
+    origin, so the true athlete must win anyway."""
+    lock = AthleteLock()
+    athlete_full = BBox(x=300.0, y=200.0, w=40.0, h=100.0)  # center (320, 250)
+    decoy_full = BBox(x=500.0, y=60.0, w=30.0, h=80.0)  # smaller: loses frame 1
+    assert lock.select([athlete_full, decoy_full], origin=(0.0, 0.0)) == 0
+
+    # Next call is an ROI crop with origin (288, 170) (crop_around of the
+    # athlete bbox at pad 0.3). In crop space the athlete is at center
+    # (32, 80) -- full-frame (320, 250), dead on the previous center --
+    # while the decoy at crop center (60, 150) is full-frame (348, 320).
+    athlete_crop = BBox(x=12.0, y=30.0, w=40.0, h=100.0)
+    decoy_crop = BBox(x=50.0, y=130.0, w=20.0, h=40.0)
+    # The trap this test pins: comparing RAW crop coordinates against the
+    # stale full-frame center would pick the decoy.
+    stale_center = athlete_full.center
+    assert math.dist(decoy_crop.center, stale_center) < math.dist(athlete_crop.center, stale_center)
+    assert lock.select([athlete_crop, decoy_crop], origin=(288.0, 170.0)) == 0
+    # The stored bbox is full-frame, ready for the next regime either way.
+    assert lock.prev_bbox == BBox(x=300.0, y=200.0, w=40.0, h=100.0)
+
+    # Crop -> full transition (post-miss reset / rerun entry hand the
+    # backend full frames again): a larger person elsewhere still loses.
+    big_decoy = BBox(x=480.0, y=40.0, w=120.0, h=200.0)
+    assert lock.select([big_decoy, athlete_full], origin=(0.0, 0.0)) == 1
+
+
+def test_athlete_lock_reset_clears_previous_bbox() -> None:
+    lock = AthleteLock()
+    anchor = BBox(x=100.0, y=100.0, w=50.0, h=50.0)
+    assert lock.select([anchor]) == 0
+    lock.reset()
+    # After a reset the lock re-acquires by area, not by proximity to the
+    # dropped bbox.
+    near_prev_but_small = BBox(x=120.0, y=120.0, w=5.0, h=5.0)
+    far_but_large = BBox(x=400.0, y=300.0, w=80.0, h=80.0)
+    assert lock.select([near_prev_but_small, far_but_large]) == 1
+
+
 def test_keypoints_bbox_spans_min_max() -> None:
     bbox = keypoints_bbox(coco_person(100.0, 200.0, half=20.0))
     assert bbox == BBox(x=80.0, y=160.0, w=40.0, h=80.0)
@@ -230,6 +274,29 @@ def test_crop_around_clamps_to_image_bounds() -> None:
     assert (x0, y0) == (0, 0)
     assert crop.shape == (65, 65, 3)
     assert np.array_equal(crop, image[0:65, 0:65])
+
+
+def test_crop_around_enforces_minimum_extent_on_degenerate_bbox() -> None:
+    """A single-landmark hit yields a zero-area bbox; the crop must still
+    be at least MIN_CROP_EXTENT_PX (32) per side, centered on the bbox,
+    not a ~1px sliver that guarantees the next detection misses."""
+    image = full_image()
+    crop, x0, y0 = crop_around(BBox(x=320.0, y=240.0, w=0.0, h=0.0), image)
+    assert (x0, y0) == (304, 224)
+    assert crop.shape == (32, 32, 3)
+    assert np.array_equal(crop, image[224:256, 304:336])
+
+    # Only the deficient dimension expands: a tall zero-width bbox keeps
+    # its padded height and gets the 32px minimum width.
+    crop, x0, y0 = crop_around(BBox(x=320.0, y=150.0, w=0.0, h=100.0), image)
+    assert crop.shape == (160, 32, 3)
+
+
+def test_crop_around_minimum_extent_clamps_at_frame_edge() -> None:
+    image = full_image()
+    crop, x0, y0 = crop_around(BBox(x=2.0, y=2.0, w=0.0, h=0.0), image)
+    assert (x0, y0) == (0, 0)
+    assert crop.shape == (18, 18, 3)  # 32px window clamped to the frame
 
 
 def test_crop_around_off_frame_bbox_falls_back_to_full_frame() -> None:
@@ -320,6 +387,9 @@ def test_roi_mapping_returns_full_frame_coords() -> None:
     # Call 0 saw the full frame; call 1 saw the 30%-padded bbox crop.
     assert fake.seen_shapes[0] == FULL_SHAPE
     assert fake.seen_shapes[1] == (160, 64, 3)
+    # Each call carries its full-frame origin so backend person locks can
+    # stay in full-frame coordinates across the full->crop transition.
+    assert fake.seen_origins == [(0.0, 0.0), (288.0, 170.0)]
 
     assert first is not None
     assert first["left_shoulder"].x == 300.0  # full-frame pass-through
@@ -343,6 +413,23 @@ def test_strided_pose_miss_resets_to_full_frame_search() -> None:
     assert fake.seen_shapes[1] == (160, 64, 3)  # ROI engaged after the hit
     assert fake.seen_shapes[2] == FULL_SHAPE  # miss dropped the ROI
     assert pose.results[1][1] is None
+
+
+def test_strided_pose_treats_empty_detection_as_miss() -> None:
+    """An all-below-threshold detection comes back as {} -- that is a
+    miss (recorded None, ROI dropped), not a zero-landmark hit that
+    would crash points_bbox."""
+    script_results = [torso_points(), {}, torso_points()]
+    fake = FakePoseBackend(lambda call_index: script_results[call_index])
+    pose = StridedPose(fake, stride=1)
+    image = full_image()
+
+    pose.feed(0.0, image, 0)
+    assert pose.feed(1 / 60.0, image, 1) is None
+    pose.feed(2 / 60.0, image, 2)
+
+    assert pose.results[1][1] is None
+    assert fake.seen_shapes[2] == FULL_SHAPE  # the {} miss dropped the ROI
 
 
 # ---------------------------------------------------------------------------
