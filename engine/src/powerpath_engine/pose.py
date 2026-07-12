@@ -14,7 +14,8 @@ Because the real backends cannot run in tests, every piece of their logic
 that CAN be pure IS pure and module-level: COCO-17 index -> landmark-name
 mapping (`coco17_to_landmarks`), MediaPipe's normalized-coordinate mapping
 (`mediapipe_landmarks_to_samples`), the single-athlete-lock person
-selection (`select_person`), and the ROI crop / coordinate-mapping helpers
+selection (`select_person` / `AthleteLock`), and the ROI crop /
+coordinate-mapping helpers
 (`crop_around`, `map_to_full_frame`, `points_bbox`, `keypoints_bbox`).
 The backend classes are thin shells over library calls plus these
 functions.
@@ -59,6 +60,13 @@ from powerpath_engine.series import LandmarkFrame, LandmarkSeries, Sample
 # as "data" with a small visibility would poison smoothing and joint-angle
 # math downstream.
 MIN_LANDMARK_SCORE = 0.3
+
+# Minimum ROI crop extent per dimension. A degenerate landmark bbox (a
+# single confident landmark has zero width and height) would otherwise
+# yield a ~1px crop on the next call, guaranteeing a miss; any padded
+# window smaller than this is expanded to it, centered on the bbox and
+# clamped to the frame.
+MIN_CROP_EXTENT_PX = 32
 
 # COCO-17 keypoint index -> our landmark name (series.LANDMARK_NAMES
 # vocabulary). Indices 1-4 (eyes, ears) have no downstream use in barbell
@@ -140,11 +148,18 @@ class PoseBackend(Protocol):
 
     Samples carry x/y in px of the IMAGE THE BACKEND WAS GIVEN (which may
     be a crop -- StridedPose maps back to full frame) and visibility in
-    [0, 1]. `t` is a 0.0 placeholder; the caller stamps PTS seconds.
-    Returns None when no usable person is detected.
+    [0, 1]. `origin` is that image's top-left corner in FULL-FRAME px
+    ((0, 0) unless the caller cropped): backends that lock onto a person
+    across calls use it to keep the lock in full-frame coordinates, so
+    the caller alternating full frames and crops never makes the lock
+    compare across coordinate regimes. `t` is a 0.0 placeholder; the
+    caller stamps PTS seconds. Returns None when no usable person is
+    detected.
     """
 
-    def detect(self, image_bgr: np.ndarray) -> dict[str, Sample] | None: ...
+    def detect(
+        self, image_bgr: np.ndarray, *, origin: tuple[float, float] = (0.0, 0.0)
+    ) -> dict[str, Sample] | None: ...
 
 
 class FakePoseBackend:
@@ -152,18 +167,22 @@ class FakePoseBackend:
 
     `script(call_index)` supplies the result for the call_index-th detect
     call (0-based). `calls` counts detect invocations; `seen_shapes`
-    records each received image's shape so tests can assert the backend
-    saw a crop of the expected size without buffering the images
-    themselves.
+    records each received image's shape and `seen_origins` each call's
+    full-frame origin, so tests can assert the backend saw a crop of the
+    expected size and position without buffering the images themselves.
     """
 
     def __init__(self, script: Callable[[int], dict[str, Sample] | None]) -> None:
         self.script = script
         self.calls = 0
         self.seen_shapes: list[tuple[int, ...]] = []
+        self.seen_origins: list[tuple[float, float]] = []
 
-    def detect(self, image_bgr: np.ndarray) -> dict[str, Sample] | None:
+    def detect(
+        self, image_bgr: np.ndarray, *, origin: tuple[float, float] = (0.0, 0.0)
+    ) -> dict[str, Sample] | None:
         self.seen_shapes.append(tuple(image_bgr.shape))
+        self.seen_origins.append(origin)
         result = self.script(self.calls)
         self.calls += 1
         return result
@@ -257,6 +276,39 @@ def select_person(bboxes: Sequence[BBox], prev_bbox: BBox | None) -> int:
     return min(range(len(bboxes)), key=lambda i: math.dist(bboxes[i].center, (px, py)))
 
 
+class AthleteLock:
+    """Stateful single-athlete lock kept in FULL-FRAME coordinates.
+
+    Wraps `select_person` with the cross-call state a multi-person
+    backend needs: the previously chosen bbox. Candidate bboxes arrive in
+    the coordinate space of whatever image the backend was given
+    (possibly an ROI crop); `origin` -- that image's top-left in
+    full-frame px -- translates them into full-frame space BEFORE
+    selection AND storage. The invariant: the previous bbox and every
+    candidate it is compared against are always full-frame px, so a
+    caller alternating full frames and crops (StridedPose does, at ROI
+    engagement, post-miss reset and rerun entry) can never make the lock
+    compare stale coordinates from another regime -- a second person
+    inside a padded crop cannot steal the track. This is the pure,
+    rtmlib-free half of RTMLibBackend's person tracking.
+    """
+
+    def __init__(self) -> None:
+        self.prev_bbox: BBox | None = None
+
+    def select(self, bboxes: Sequence[BBox], origin: tuple[float, float] = (0.0, 0.0)) -> int:
+        """Pick and remember the tracked person among image-space bboxes."""
+        ox, oy = origin
+        candidates = [BBox(x=b.x + ox, y=b.y + oy, w=b.w, h=b.h) for b in bboxes]
+        chosen = select_person(candidates, self.prev_bbox)
+        self.prev_bbox = candidates[chosen]
+        return chosen
+
+    def reset(self) -> None:
+        """Drop the lock (miss): the next select re-acquires by area."""
+        self.prev_bbox = None
+
+
 def crop_around(
     prev_bbox: BBox, image: np.ndarray, pad: float = 0.3
 ) -> tuple[np.ndarray, int, int]:
@@ -267,16 +319,22 @@ def crop_around(
     is a fraction of the bbox's own width/height added on EACH side;
     0.3 covers both inter-frame athlete motion at stride 2 and the body
     extent beyond the landmark bbox (landmarks are joint centers -- the
-    head, hands and feet stick out past them). Bounds are floored/ceiled
-    outward so padding never truncates inward. A bbox that clamps to an
-    empty window (track drifted off-frame) falls back to the full frame at
+    head, hands and feet stick out past them). A padded window narrower
+    than MIN_CROP_EXTENT_PX in either dimension (degenerate bbox, e.g. a
+    single confident landmark) is expanded to that minimum, centered on
+    the bbox and clamped to the frame. Bounds are floored/ceiled outward
+    so padding never truncates inward. A bbox that clamps to an empty
+    window (track drifted off-frame) falls back to the full frame at
     offset (0, 0) rather than handing the backend an empty image.
     """
     frame_h, frame_w = image.shape[:2]
-    x0 = max(0, math.floor(prev_bbox.x - pad * prev_bbox.w))
-    y0 = max(0, math.floor(prev_bbox.y - pad * prev_bbox.h))
-    x1 = min(frame_w, math.ceil(prev_bbox.x + prev_bbox.w * (1.0 + pad)))
-    y1 = min(frame_h, math.ceil(prev_bbox.y + prev_bbox.h * (1.0 + pad)))
+    cx, cy = prev_bbox.center
+    half_w = max(prev_bbox.w * (0.5 + pad), MIN_CROP_EXTENT_PX / 2.0)
+    half_h = max(prev_bbox.h * (0.5 + pad), MIN_CROP_EXTENT_PX / 2.0)
+    x0 = max(0, math.floor(cx - half_w))
+    y0 = max(0, math.floor(cy - half_h))
+    x1 = min(frame_w, math.ceil(cx + half_w))
+    y1 = min(frame_h, math.ceil(cy + half_h))
     if x1 <= x0 or y1 <= y0:
         return image, 0, 0
     return image[y0:y1, x0:x1], x0, y0
@@ -304,15 +362,16 @@ class RTMLibBackend:
     design brief.
 
     rtmlib returns EVERY detected person, so the single-athlete lock
-    lives here: `select_person` keeps the detection nearest the previous
-    athlete bbox (largest bbox on the first frame / after a miss). Note
-    the previous bbox is in the coordinate frame of whatever image the
-    backend was last given -- when StridedPose feeds athlete-centered
-    crops the crop origin shifts a little between calls, but because the
-    crops track the athlete, crop-frame proximity still separates the
-    athlete (near center, small shift) from a background person (far
-    away); a miss resets the bbox so a coordinate-regime change
-    (crop <-> full frame) never compares stale coordinates.
+    lives here via `AthleteLock`: the previously chosen bbox is kept in
+    FULL-FRAME px, and each call's candidate bboxes are translated by
+    `origin` (the given image's top-left in full-frame px) before the
+    nearest-to-previous comparison. That is the invariant that makes the
+    lock safe under StridedPose's regime changes -- full frame on
+    bootstrap / after a miss / at rerun entry, ROI crops otherwise --
+    because both sides of every comparison are always full-frame
+    coordinates, a spotter inside a padded crop cannot steal the track.
+    A miss (no people, or nothing confident) resets the lock and the
+    next call re-acquires by largest bbox.
     """
 
     def __init__(self, mode: str = "balanced", device: str = "cpu") -> None:
@@ -324,20 +383,20 @@ class RTMLibBackend:
                 "'pose' extra: uv add rtmlib onnxruntime"
             ) from exc
         self._body = rtmlib.Body(mode=mode, backend="onnxruntime", device=device)
-        self._prev_bbox: BBox | None = None
+        self._lock = AthleteLock()
 
-    def detect(self, image_bgr: np.ndarray) -> dict[str, Sample] | None:
+    def detect(
+        self, image_bgr: np.ndarray, *, origin: tuple[float, float] = (0.0, 0.0)
+    ) -> dict[str, Sample] | None:
         keypoints, scores = self._body(image_bgr)
         if keypoints is None or len(keypoints) == 0:
-            self._prev_bbox = None
+            self._lock.reset()
             return None
-        bboxes = [keypoints_bbox(person) for person in keypoints]
-        chosen = select_person(bboxes, self._prev_bbox)
+        chosen = self._lock.select([keypoints_bbox(person) for person in keypoints], origin)
         points = coco17_to_landmarks(keypoints[chosen], scores[chosen])
         if not points:
-            self._prev_bbox = None
+            self._lock.reset()
             return None
-        self._prev_bbox = bboxes[chosen]
         return points
 
 
@@ -372,7 +431,11 @@ class MediaPipeBackend:
         )
         self._landmarker = mp_vision.PoseLandmarker.create_from_options(options)
 
-    def detect(self, image_bgr: np.ndarray) -> dict[str, Sample] | None:
+    def detect(
+        self, image_bgr: np.ndarray, *, origin: tuple[float, float] = (0.0, 0.0)
+    ) -> dict[str, Sample] | None:
+        # `origin` is accepted for protocol conformance but unused:
+        # num_poses=1 keeps no cross-call person lock to translate.
         rgb = np.ascontiguousarray(image_bgr[:, :, ::-1])  # mp.Image wants RGB
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         result = self._landmarker.detect(mp_image)
@@ -401,8 +464,11 @@ class StridedPose:
     (full-frame px); backend output is mapped back to full-frame
     coordinates via `map_to_full_frame`, so callers only ever see
     full-frame px. A miss drops the ROI -- the next run searches the full
-    frame (mirrors MarkerTracker's reset behavior and keeps the backend's
-    own person-lock bbox from spanning two coordinate regimes).
+    frame (mirrors MarkerTracker's reset behavior). Every backend call is
+    passed the given image's full-frame origin, so a backend's own person
+    lock (`AthleteLock`) always compares full-frame coordinates and
+    survives every regime change this scheduling induces (full->crop at
+    ROI engagement, crop->full after a miss and at rerun entry/exit).
 
     Full-rate re-runs: `rerun_full_rate(window_frames)` runs the backend
     on EVERY frame of a rep window and returns a LandmarkSeries. The
@@ -464,15 +530,18 @@ class StridedPose:
 def _detect_mapped(
     backend: PoseBackend, image: np.ndarray, t: float, prev_bbox: BBox | None
 ) -> tuple[dict[str, Sample] | None, BBox | None]:
-    """Run `backend` on `image` (cropped to prev_bbox when there is one),
-    map the result to full-frame px with `t` stamped, and return it with
-    the next ROI bbox (the detection's landmark extent; None on a miss)."""
+    """Run `backend` on `image` (cropped to prev_bbox when there is one,
+    passing the crop's full-frame origin so backend person locks stay in
+    full-frame coordinates), map the result to full-frame px with `t`
+    stamped, and return it with the next ROI bbox (the detection's
+    landmark extent; None on a miss -- an empty dict counts as a miss,
+    it has no bbox to crop around)."""
     if prev_bbox is not None:
         crop, x0, y0 = crop_around(prev_bbox, image)
     else:
         crop, x0, y0 = image, 0, 0
-    raw = backend.detect(crop)
-    if raw is None:
+    raw = backend.detect(crop, origin=(float(x0), float(y0)))
+    if not raw:
         return None, None
     points = map_to_full_frame(raw, x0, y0, t)
     return points, points_bbox(points)
