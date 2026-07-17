@@ -390,6 +390,13 @@ def test_fake_engine_default_runner_writes_canned_artifacts(tmp_path, monkeypatc
     assert len(metrics["reps"]) >= 1
     assert len(overlay["frames"]) >= 1
 
+    # At least one canned rep carries BOTH severities so the Task 12 E2E can
+    # render a fault chip and exercise the informational-muted styling.
+    severity_pairs = {
+        tuple(sorted(f["severity"] for f in rep["faults"])) for rep in overlay["reps"]
+    }
+    assert ("fault", "informational") in severity_pairs
+
 
 def test_process_pool_fake_engine_end_to_end(tmp_path, monkeypatch):
     """The REAL ProcessPoolExecutor path: no injected runner, so the app uses

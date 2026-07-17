@@ -14,7 +14,11 @@ from typing import Any
 
 VIDEO_KEYS = {"width", "height", "fps_avg", "duration_s"}
 CALIBRATION_KEYS = {"source", "bar_scale_cm_per_px", "warning"}
-FAULT_KEYS = {"code", "message", "phase", "value", "threshold"}
+# metrics.json faults are the frozen 5-key shape; overlay.json faults add
+# `severity` ("fault" | "informational") so the UI can mute informational
+# findings.
+METRICS_FAULT_KEYS = {"code", "message", "phase", "value", "threshold"}
+OVERLAY_FAULT_KEYS = METRICS_FAULT_KEYS | {"severity"}
 
 METRICS_TOP_KEYS = {
     "video",
@@ -73,12 +77,14 @@ def _assert_video(video: Any) -> None:
         assert isinstance(video[key], int | float), f"video.{key} must be numeric"
 
 
-def _assert_faults(faults: Any) -> None:
+def _assert_faults(faults: Any, keys: set[str]) -> None:
     assert isinstance(faults, list)
     for fault in faults:
-        assert set(fault) == FAULT_KEYS
+        assert set(fault) == keys
         assert isinstance(fault["code"], str)
         assert isinstance(fault["message"], str)
+        if "severity" in keys:
+            assert fault["severity"] in ("fault", "informational")
 
 
 def _assert_phases(phases: Any) -> None:
@@ -114,7 +120,7 @@ def assert_metrics_contract(data: dict[str, Any]) -> None:
         assert set(rep["metrics"]) == METRICS_METRICS_KEYS
         for angle_key in ("hip_angle_at_phase", "knee_angle_at_phase", "elbow_angle_at_phase"):
             assert isinstance(rep["metrics"][angle_key], dict)
-        _assert_faults(rep["faults"])
+        _assert_faults(rep["faults"], METRICS_FAULT_KEYS)
         _assert_phases(rep["phases"])
 
 
@@ -159,5 +165,5 @@ def assert_overlay_contract(data: dict[str, Any]) -> None:
         for point in rep["bar_path"]:
             _assert_point(point, "reps[].bar_path[]")
         _assert_phases(rep["phases"])
-        _assert_faults(rep["faults"])
+        _assert_faults(rep["faults"], OVERLAY_FAULT_KEYS)
         assert rep["unanalyzed_reason"] is None or isinstance(rep["unanalyzed_reason"], str)

@@ -16,7 +16,9 @@ serves verbatim from disk and Task 12's player renders):
   bar ``[x, y]`` and the ``skeleton`` landmark map in UPRIGHT IMAGE pixels
   (y-down, drawable directly), plus ``reps[]`` with the per-rep
   ``bar_path`` polyline, phases, faults, score/made and
-  ``unanalyzed_reason``.
+  ``unanalyzed_reason``. Overlay faults carry ``severity``
+  ("fault" | "informational" -- the UI mutes informational findings);
+  metrics faults stay the frozen 5-key shape without it.
 
 Serialization rules (contract): snake_case keys; never NaN/Infinity --
 every value is sanitized to null (``json.dump(allow_nan=False)`` enforces
@@ -43,7 +45,7 @@ import numpy as np
 from powerpath_engine import decode
 from powerpath_engine.faults import FaultFinding
 from powerpath_engine.pipeline import AnalysisResult, RepResult
-from powerpath_engine.scoring import _smoothness_fraction
+from powerpath_engine.scoring import smoothness_fraction
 from powerpath_engine.series import LandmarkSeries, TimeSeries
 
 # Two frame timestamps within this are "the same instant" when merging the
@@ -171,7 +173,8 @@ def _score_int(rep: RepResult) -> int | None:
     return int(round(rep.score)) if rep.score is not None else None
 
 
-def _fault_dict(fault: FaultFinding) -> dict[str, Any]:
+def _metrics_fault_dict(fault: FaultFinding) -> dict[str, Any]:
+    """The frozen 5-key metrics.json fault shape (no severity)."""
     return {
         "code": fault.code,
         "message": fault.message,
@@ -179,6 +182,12 @@ def _fault_dict(fault: FaultFinding) -> dict[str, Any]:
         "value": fault.value,
         "threshold": fault.threshold,
     }
+
+
+def _overlay_fault_dict(fault: FaultFinding) -> dict[str, Any]:
+    """The 6-key overlay.json fault shape: the metrics keys plus ``severity``
+    ("fault" | "informational") so the UI can mute informational findings."""
+    return {**_metrics_fault_dict(fault), "severity": fault.severity}
 
 
 def _detected_phases(rep: RepResult) -> dict[str, float]:
@@ -196,12 +205,12 @@ def _metrics_rep(rep: RepResult) -> dict[str, Any]:
             "bar_drift_cm": m.bar_drift_cm,
             "peak_concentric_velocity_ms": m.peak_concentric_velocity_ms,
             "path_length_ratio": m.path_length_ratio,
-            "smoothness": _smoothness_fraction(m.smoothness_normalized_jerk),
+            "smoothness": smoothness_fraction(m.smoothness_normalized_jerk),
             "hip_angle_at_phase": dict(m.hip_angle_at_phase),
             "knee_angle_at_phase": dict(m.knee_angle_at_phase),
             "elbow_angle_at_phase": dict(m.elbow_angle_at_phase),
         },
-        "faults": [_fault_dict(f) for f in rep.faults],
+        "faults": [_metrics_fault_dict(f) for f in rep.faults],
         "phases": _detected_phases(rep),
     }
 
@@ -221,7 +230,7 @@ def _overlay_rep(rep: RepResult, bar_series: TimeSeries) -> dict[str, Any]:
         "score": _score_int(rep),
         "bar_path": bar_path,
         "phases": _detected_phases(rep),
-        "faults": [_fault_dict(f) for f in rep.faults],
+        "faults": [_overlay_fault_dict(f) for f in rep.faults],
         "unanalyzed_reason": rep.unanalyzed_reason,
     }
 

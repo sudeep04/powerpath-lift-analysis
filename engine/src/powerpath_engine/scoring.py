@@ -18,7 +18,7 @@ Two steps sit on top of :mod:`~powerpath_engine.metrics` and
 
        smoothness 30 + path efficiency 30 + velocity 20 + faults 20
 
-   * ``smoothness`` scales with :func:`_smoothness_fraction` of the normalized
+   * ``smoothness`` scales with :func:`smoothness_fraction` of the normalized
      jerk (1.0 at zero jerk, 0.5 at :data:`NJ_HALF_CREDIT`).
    * ``path`` scales with :func:`_path_fraction` of the path-length ratio (1.0
      at a dead-vertical ratio of 1.0, 0.0 at :data:`PATH_RATIO_ZERO`).
@@ -229,8 +229,12 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
-def _smoothness_fraction(normalized_jerk: float) -> float:
-    """1.0 at zero jerk, 0.5 at ``NJ_HALF_CREDIT``, decaying toward 0."""
+def smoothness_fraction(normalized_jerk: float) -> float:
+    """1.0 at zero jerk, 0.5 at ``NJ_HALF_CREDIT``, decaying toward 0.
+
+    Public: the overlay writer serializes this same fraction as the
+    contract's ``smoothness`` value.
+    """
     if normalized_jerk <= 0.0:
         return 1.0
     return 1.0 / (1.0 + normalized_jerk / NJ_HALF_CREDIT)
@@ -280,7 +284,7 @@ def score_rep(
     if not made:
         return _missed_score()
 
-    sm_frac = _smoothness_fraction(metrics.smoothness_normalized_jerk)
+    sm_frac = smoothness_fraction(metrics.smoothness_normalized_jerk)
     path_frac = _path_fraction(metrics.path_length_ratio)
     penalized = sum(1 for f in faults if f.severity != "informational")
     fault_component = max(0.0, FAULTS_MAX - FAULT_PENALTY * penalized)

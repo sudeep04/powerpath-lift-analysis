@@ -14,7 +14,7 @@ import pytest
 from contract_utils import assert_metrics_contract, assert_overlay_contract
 from video_utils import moving_square_frames, write_test_video
 
-from powerpath_engine import decode, overlay
+from powerpath_engine import decode, faults, overlay, registry
 from powerpath_engine.calibration import CalibrationResult
 from powerpath_engine.decode import VideoMeta
 from powerpath_engine.faults import FaultFinding
@@ -208,6 +208,35 @@ def test_overlay_bar_path_is_the_reps_window_slice(tmp_path) -> None:
     # Samples at t = 0, 1/30, ..., 12/30 fall inside [0, 0.4].
     assert len(rep["bar_path"]) == 13
     assert rep["bar_path"][0] == [100.0, 200.0]
+
+
+def test_overlay_faults_carry_severity_metrics_faults_do_not(tmp_path) -> None:
+    """Overlay faults are the 6-key shape with `severity` (the UI mutes
+    informational findings); metrics faults stay the frozen 5-key shape.
+    `catch_above_parallel` -- the real informational rule -- must serialize
+    as severity:"informational" through the overlay writer."""
+    informational = faults.catch_above_parallel(
+        RepMetrics(hip_angle_at_phase={"catch": 60.0}), registry.get("power_clean")
+    )
+    assert informational is not None and informational.severity == "informational"
+    result = _result([_rep(0, faults=[_fault(), informational])])
+
+    overlay_path = tmp_path / "overlay.json"
+    overlay.write_overlay_json(result, result.bar_px, result.landmarks_px, overlay_path)
+    overlay_faults = json.loads(overlay_path.read_text())["reps"][0]["faults"]
+    assert [set(f) for f in overlay_faults] == [
+        {"code", "message", "phase", "value", "threshold", "severity"}
+    ] * 2
+    assert overlay_faults[0]["severity"] == "fault"  # FaultFinding's default
+    assert overlay_faults[1]["code"] == "catch_above_parallel"
+    assert overlay_faults[1]["severity"] == "informational"
+
+    metrics_path = tmp_path / "metrics.json"
+    overlay.write_metrics_json(result, metrics_path)
+    metrics_faults = json.loads(metrics_path.read_text())["reps"][0]["faults"]
+    assert [set(f) for f in metrics_faults] == [
+        {"code", "message", "phase", "value", "threshold"}
+    ] * 2
 
 
 def test_overlay_unanalyzed_reason_serialized(tmp_path) -> None:

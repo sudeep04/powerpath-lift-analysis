@@ -122,6 +122,36 @@ def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
                 }
             )
         phases = {"knee_pass": round(t0 + 0.2, 3), "catch": round(t0 + 0.5, 3)}
+        # Rep 0 carries one penalizing fault + one informational finding so
+        # Task 12's Playwright E2E can render a fault chip AND exercise the
+        # informational-muted styling. Overlay faults carry `severity`;
+        # metrics faults are the frozen 5-key shape without it.
+        overlay_faults: list[dict[str, Any]] = []
+        if i == 0:
+            overlay_faults = [
+                {
+                    "code": "bar_drift",
+                    "message": "Bar drifted 7.2cm from vertical (envelope 6cm).",
+                    "phase": "knee_pass",
+                    "value": 7.2,
+                    "threshold": 6.0,
+                    "severity": "fault",
+                },
+                {
+                    "code": "catch_above_parallel",
+                    "message": (
+                        "Received with the hip at 62deg (below 90deg -- became a squat rep)."
+                    ),
+                    "phase": "catch",
+                    "value": 62.0,
+                    "threshold": 90.0,
+                    "severity": "informational",
+                },
+            ]
+        metrics_faults = [
+            {key: value for key, value in fault.items() if key != "severity"}
+            for fault in overlay_faults
+        ]
         overlay_reps.append(
             {
                 "rep_index": i,
@@ -131,7 +161,7 @@ def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
                 "score": score,
                 "bar_path": bar_path,
                 "phases": phases,
-                "faults": [],
+                "faults": overlay_faults,
                 "unanalyzed_reason": None,
             }
         )
@@ -150,7 +180,7 @@ def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
                     "knee_angle_at_phase": {"catch": 110.0},
                     "elbow_angle_at_phase": {"catch": 60.0},
                 },
-                "faults": [],
+                "faults": metrics_faults,
                 "phases": phases,
             }
         )
