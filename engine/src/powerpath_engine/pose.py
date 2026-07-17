@@ -527,6 +527,55 @@ class StridedPose:
         return LandmarkSeries(frames)
 
 
+class NoOpPoseBackend:
+    """A backend that never detects anyone (every ``detect`` returns None).
+
+    This is what ``make_pose_backend("fake")`` returns: a model-free backend
+    for pipeline smoke runs (e.g. ``powerpath analyze --pose fake``) where
+    bar-only analysis is acceptable and no pose libraries are installed.
+    Tests that need actual landmarks construct :class:`FakePoseBackend`
+    directly with a script -- a name-only factory cannot supply one.
+    """
+
+    def detect(
+        self, image_bgr: np.ndarray, *, origin: tuple[float, float] = (0.0, 0.0)
+    ) -> dict[str, Sample] | None:
+        return None
+
+
+def make_pose_backend(name: str) -> PoseBackend:
+    """Construct a pose backend by name: ``rtmlib`` | ``mediapipe`` | ``fake``.
+
+    The factory the job runner and CLI resolve a backend through. Real
+    backends stay lazy: their libraries are imported only inside the chosen
+    backend's ``__init__``, so calling this with a name whose extra is not
+    installed raises :class:`PoseUnavailableError` (naming the install
+    command) and every other name costs nothing.
+
+    ``"fake"`` returns a :class:`NoOpPoseBackend` (no landmarks ever) -- see
+    its docstring; scripted fakes must be built directly. ``"mediapipe"``
+    reads the required ``.task`` model asset path from the
+    ``POWERPATH_MEDIAPIPE_MODEL`` environment variable (the tasks API does
+    not download models itself) and raises ``ValueError`` when it is unset.
+    An unknown name raises ``ValueError`` listing the options.
+    """
+    if name == "rtmlib":
+        return RTMLibBackend()
+    if name == "mediapipe":
+        import os
+
+        model_path = os.environ.get("POWERPATH_MEDIAPIPE_MODEL")
+        if not model_path:
+            raise ValueError(
+                "the mediapipe backend needs a pose_landmarker .task model asset; "
+                "set POWERPATH_MEDIAPIPE_MODEL to its path"
+            )
+        return MediaPipeBackend(model_path)
+    if name == "fake":
+        return NoOpPoseBackend()
+    raise ValueError(f"unknown pose backend {name!r}; options: rtmlib, mediapipe, fake")
+
+
 def _detect_mapped(
     backend: PoseBackend, image: np.ndarray, t: float, prev_bbox: BBox | None
 ) -> tuple[dict[str, Sample] | None, BBox | None]:
