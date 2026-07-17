@@ -49,3 +49,9 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Starlette's TestClient warns to migrate httpx -> httpx2; httpx2 is not yet a
+    # stable dependency we want to pull mid-build. Scoped ignore keeps test output
+    # pristine without hiding any other warning. Revisit when bumping starlette/httpx.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:",
+]
