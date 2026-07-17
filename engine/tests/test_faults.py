@@ -10,7 +10,9 @@ and hand-built configs.
 
 from __future__ import annotations
 
-from powerpath_engine import registry
+import pytest
+
+from powerpath_engine import faults, registry
 from powerpath_engine.faults import (
     BAR_DRIFT_ENVELOPE_CM,
     RULES_VERSION,
@@ -259,7 +261,7 @@ def test_back_squat_config_dispatches_squat_depth() -> None:
 
 
 def test_evaluate_faults_dispatches_all_named_rules_in_order() -> None:
-    config = _config("clean", ("bar_drift", "early_arm_bend", "catch_above_parallel", "nope"))
+    config = _config("clean", ("bar_drift", "early_arm_bend", "catch_above_parallel"))
     m = RepMetrics(
         bar_drift_cm=9.0,
         elbow_angle_at_phase={"second_pull": 150.0},
@@ -267,6 +269,41 @@ def test_evaluate_faults_dispatches_all_named_rules_in_order() -> None:
     )
     findings = evaluate_faults(m, config)
     assert [f.code for f in findings] == ["bar_drift", "early_arm_bend", "catch_above_parallel"]
+
+
+def test_evaluate_faults_raises_on_unknown_rule_name() -> None:
+    # After the registry reconciliation every config name is implemented, so an
+    # unknown name is a bug -- fail loud instead of silently skipping.
+    config = _config("clean", ("bar_drift", "nope"))
+    with pytest.raises(ValueError, match="unknown fault rule: nope"):
+        evaluate_faults(RepMetrics(), config)
+
+
+def test_every_config_fault_rule_name_is_implemented() -> None:
+    # Permanently prevents the silent-gap regression: a config naming a rule
+    # that faults.py does not implement fails here, not invisibly at runtime.
+    for config in registry.all_configs():
+        for name in config.fault_rules:
+            assert name in faults._FAULT_RULES, (
+                f"{config.key} names unimplemented fault rule {name!r}"
+            )
+
+
+def test_every_config_dispatches_all_its_rules_when_tripped() -> None:
+    # One metrics bundle that trips every implemented rule: each real config
+    # must dispatch its full fault_rules list, in config order (back_squat
+    # dispatches squat_depth, deadlift dispatches no_lockout, ...).
+    tripping = RepMetrics(
+        bar_drift_cm=20.0,
+        elbow_angle_at_phase={"second_pull": 150.0, "receive": 150.0, "lockout": 150.0},
+        hip_angle_at_phase={"catch": 70.0, "lockout": 150.0},
+        bottom_hip_y_cm=100.0,
+        bottom_knee_y_cm=90.0,
+        press_elbow_extends_before_drive=True,
+    )
+    for config in registry.all_configs():
+        codes = [f.code for f in evaluate_faults(tripping, config)]
+        assert codes == list(config.fault_rules), config.key
 
 
 def test_evaluate_faults_is_deterministic() -> None:

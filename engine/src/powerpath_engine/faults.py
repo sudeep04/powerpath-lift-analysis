@@ -17,8 +17,9 @@ Registry note: every M1 movement config names only rules implemented in the
 ``squat_depth``, ``early_press_out``, ``catch_above_parallel``, ``no_lockout``.
 Faults that cannot be detected from the single-side-view camera premise (or
 that need signals not extracted yet -- ``knees_cave``, ``rounded_back``, ...)
-were dropped from the configs and are noted there as v2. Any config fault-rule
-name without an implementation here is skipped by :func:`evaluate_faults`. Bump
+were dropped from the configs and are noted there as v2. A fault-rule name
+without an implementation here is a bug, so :func:`evaluate_faults` raises
+``ValueError`` on one instead of silently skipping it. Bump
 :data:`RULES_VERSION` when a rule's threshold or logic changes so stored
 analyses stay comparable.
 """
@@ -236,15 +237,16 @@ def evaluate_faults(metrics: RepMetrics, config: MovementConfig) -> list[FaultFi
     """Run ``config.fault_rules`` against ``metrics`` and collect the findings.
 
     Each name in ``config.fault_rules`` is resolved through the explicit
-    :data:`_FAULT_RULES` table; names without an implementation in Task 7 are
-    skipped (see the module docstring). Findings are returned in the order the
-    rules are listed on the config.
+    :data:`_FAULT_RULES` table; a name without an implementation raises
+    ``ValueError`` -- every registered config names only implemented rules, so
+    an unknown name is a bug, not a future feature (see the module docstring).
+    Findings are returned in the order the rules are listed on the config.
     """
     findings: list[FaultFinding] = []
     for name in config.fault_rules:
         rule = _FAULT_RULES.get(name)
         if rule is None:
-            continue
+            raise ValueError(f"unknown fault rule: {name}")
         finding = rule(metrics, config)
         if finding is not None:
             findings.append(finding)
