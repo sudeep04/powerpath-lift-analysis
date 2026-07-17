@@ -20,6 +20,8 @@ dependencies = [
 [project.scripts]
 # Uvicorn entry: serves the FastAPI app on 127.0.0.1:8400 (see api/main.py).
 powerpath-api = "powerpath_engine.api.main:run"
+# Analysis CLI: analyze / extract-fixtures / movements (see cli.py).
+powerpath = "powerpath_engine.cli:main"
 
 # Optional pose-inference extras -- imported LAZILY inside the backend
 # __init__s; the test suite must pass with neither installed (the global
