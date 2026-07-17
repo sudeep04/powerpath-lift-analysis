@@ -6,9 +6,9 @@ Design (from the brief + global constraints):
   ``ProcessPoolExecutor(max_workers=1)`` -- one job at a time, isolated from the
   event loop, and a crash cannot take down the API.
 * The analysis runner is **injectable**. The default runner lazily imports
-  ``powerpath_engine.pipeline.analyze`` *inside* the worker so this module (and
-  the whole test suite) imports fine before Task 8 exists. Tests inject a fake
-  runner that writes canned results.
+  ``powerpath_engine.pipeline.analyze`` *inside* the worker so the API process
+  never pays the heavy cv2/av/scipy import cost. Tests inject a fake runner
+  that writes canned results.
 * Pickling boundary: a ``ProcessPoolExecutor`` must pickle the callable and its
   args to ship them to the child. The default runner is a module-level function
   (picklable) and :class:`JobContext` / :class:`RunnerResult` are plain
@@ -87,63 +87,89 @@ def _overlay_file(ctx: JobContext) -> str:
 
 
 def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
-    """Write plausible metrics.json + overlay.json with 5 made reps.
+    """Write metrics.json + overlay.json (5 made reps) in the FROZEN contract shape.
 
     Used by the fake-engine mode (``POWERPATH_FAKE_ENGINE=1``) so the whole
     stack -- upload, poll, player -- can be exercised end to end (Task 12's
-    Playwright E2E) with no model inference and no real decoding.
+    Playwright E2E renders a real overlay from this) with no model inference
+    and no real decoding. Both payloads follow
+    ``.superpowers/sdd/overlay-metrics-contract.md`` exactly, same as the
+    real writers in ``powerpath_engine.overlay`` (the engine tests validate
+    this file's output against the shared contract assertions).
     """
-    reps = []
-    frames = []
-    bar_path_by_rep: dict[str, list[list[float]]] = {}
+    video = {"width": 1920, "height": 1080, "fps_avg": 30.0, "duration_s": 5.0}
+    frames: list[dict[str, Any]] = []
+    overlay_reps: list[dict[str, Any]] = []
+    metrics_reps: list[dict[str, Any]] = []
     for i in range(5):
-        t0 = float(i)
-        t1 = t0 + 0.8
-        score = 80.0 + i * 3.0
-        reps.append(
+        t0, t1 = float(i), float(i) + 0.8
+        score = 80 + i * 3
+        bar_path: list[list[float]] = []
+        for j in range(5):
+            t = round(t0 + j * 0.1, 3)
+            x, y = 960.0, 700.0 - j * 80.0
+            bar_path.append([x, y])
+            frames.append(
+                {
+                    "t": t,
+                    "bar": [x, y],
+                    "skeleton": {
+                        "left_hip": [930.0, y + 60.0],
+                        "right_hip": [990.0, y + 60.0],
+                        "left_knee": [925.0, y + 200.0],
+                        "right_knee": [995.0, y + 200.0],
+                    },
+                }
+            )
+        phases = {"knee_pass": round(t0 + 0.2, 3), "catch": round(t0 + 0.5, 3)}
+        overlay_reps.append(
+            {
+                "rep_index": i,
+                "t_start": t0,
+                "t_end": t1,
+                "made": True,
+                "score": score,
+                "bar_path": bar_path,
+                "phases": phases,
+                "faults": [],
+                "unanalyzed_reason": None,
+            }
+        )
+        metrics_reps.append(
             {
                 "rep_index": i,
                 "made": True,
                 "score": score,
-                "t_start": t0,
-                "t_end": t1,
+                "excluded_from_templates": False,
+                "metrics": {
+                    "bar_drift_cm": 2.0,
+                    "peak_concentric_velocity_ms": 1.5,
+                    "path_length_ratio": 1.05,
+                    "smoothness": 0.8,
+                    "hip_angle_at_phase": {"catch": 120.0},
+                    "knee_angle_at_phase": {"catch": 110.0},
+                    "elbow_angle_at_phase": {"catch": 60.0},
+                },
                 "faults": [],
-                "phases": [],
-                "unanalyzed_reason": None,
+                "phases": phases,
             }
         )
-        path = [[100.0, 400.0 - j * 20.0] for j in range(5)]
-        bar_path_by_rep[str(i)] = path
-        for j in range(5):
-            t = round(t0 + j * 0.1, 3)
-            y = 400.0 - j * 20.0
-            frames.append(
-                {
-                    "t": t,
-                    "bar": [100.0, y],
-                    "skeleton": {
-                        "left_hip": [90.0, y + 10.0],
-                        "right_hip": [110.0, y + 10.0],
-                        "left_knee": [88.0, y + 60.0],
-                        "right_knee": [112.0, y + 60.0],
-                    },
-                }
-            )
 
-    best_score = max(r["score"] for r in reps)
+    best_score = max(r["score"] for r in metrics_reps)
     metrics = {
-        "video_id": ctx.video_id,
+        "video": video,
         "movement": ctx.movement,
         "load_kg": ctx.load_kg,
         "extraction_version": 1,
         "rules_version": 1,
-        "rep_count": len(reps),
-        "best_score": best_score,
-        "reps": reps,
-        "unanalyzed": [],
-        "fake_engine": True,
+        "calibration": {
+            "source": "manual",
+            "bar_scale_cm_per_px": 0.2,
+            "warning": "fake engine (POWERPATH_FAKE_ENGINE=1): canned analysis",
+        },
+        "reps": metrics_reps,
     }
-    overlay = {"frames": frames, "reps": reps, "bar_path_by_rep": bar_path_by_rep}
+    overlay = {"video": video, "movement": ctx.movement, "frames": frames, "reps": overlay_reps}
 
     os.makedirs(ctx.output_dir, exist_ok=True)
     with open(_metrics_file(ctx), "w") as fh:
@@ -152,11 +178,11 @@ def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
         json.dump(overlay, fh)
 
     return RunnerResult(
-        rep_count=len(reps),
-        best_score=best_score,
+        rep_count=len(overlay_reps),
+        best_score=float(best_score),
         extraction_version=1,
         rules_version=1,
-        reps=reps,
+        reps=overlay_reps,
     )
 
 
@@ -164,54 +190,50 @@ def default_runner(ctx: JobContext, progress_cb: Callable[[str, int], None]) -> 
     """Production runner. Module-level so it is picklable for the process pool.
 
     In ``POWERPATH_FAKE_ENGINE=1`` mode it emits instant canned results (for the
-    E2E harness). Otherwise it *lazily* imports the real pipeline -- the import
-    is deferred to here so importing this module never requires Task 8's
-    ``pipeline``/``overlay`` modules to exist.
+    E2E harness). Otherwise it runs ``pipeline.analyze`` and the ``overlay``
+    writers -- imported *lazily* here so the API process never pays the
+    cv2/av/scipy import cost (the pool's worker subprocess is what actually
+    executes this) and fake-mode runs stay dependency-light.
     """
     if os.environ.get("POWERPATH_FAKE_ENGINE") == "1":
         for pct, stage in enumerate(STAGES):
             progress_cb(stage, int((pct + 1) / len(STAGES) * 100))
         return _write_canned_artifacts(ctx)
 
-    # --- real pipeline path (finalised when Task 8 lands) -----------------
-    from powerpath_engine import overlay, pipeline, versions  # lazy: not needed for tests
+    # --- real pipeline path ------------------------------------------------
+    from powerpath_engine import overlay, pipeline  # lazy: keep API import light
     from powerpath_engine.pose import make_pose_backend  # lazy
 
     pose_backend = make_pose_backend(os.environ.get("POWERPATH_POSE", "rtmlib"))
 
-    def _cb(stage: str, pct: int) -> None:
-        progress_cb(stage, int(pct))
-
     result = pipeline.analyze(
         ctx.video_path,
-        movement_key=ctx.movement,
-        load_kg=ctx.load_kg,
-        athlete_height_cm=ctx.athlete_height_cm,
-        pose_backend=pose_backend,
-        progress_cb=_cb,
+        ctx.movement,
+        ctx.load_kg,
+        ctx.athlete_height_cm,
+        pose_backend,
+        progress_cb=lambda stage, pct: progress_cb(stage, int(pct)),
     )
     overlay.write_metrics_json(result, _metrics_file(ctx))
-    overlay.write_overlay_json(result, _overlay_file(ctx))
+    overlay.write_overlay_json(result, result.bar_px, result.landmarks_px, _overlay_file(ctx))
 
-    made_scores = [
-        r.score for r in result.reps if getattr(r, "made", False) and r.score is not None
-    ]
     reps = [
         {
-            "rep_index": i,
-            "made": bool(getattr(r, "made", False)),
-            "score": getattr(r, "score", None),
-            "t_start": getattr(getattr(r, "window", None), "t_start", None),
-            "t_end": getattr(getattr(r, "window", None), "t_end", None),
-            "unanalyzed_reason": None,
+            "rep_index": r.window.rep_index,
+            "made": r.made,
+            "score": None if r.score is None else int(round(r.score)),
+            "t_start": r.window.t_start,
+            "t_end": r.window.t_end,
+            "unanalyzed_reason": r.unanalyzed_reason,
         }
-        for i, r in enumerate(result.reps)
+        for r in result.reps
     ]
+    made_scores = [r["score"] for r in reps if r["made"] and r["score"] is not None]
     return RunnerResult(
         rep_count=len(result.reps),
-        best_score=max(made_scores) if made_scores else None,
-        extraction_version=getattr(versions, "EXTRACTION_VERSION", None),
-        rules_version=getattr(versions, "RULES_VERSION", None),
+        best_score=float(max(made_scores)) if made_scores else None,
+        extraction_version=result.extraction_version,
+        rules_version=result.rules_version,
         reps=reps,
     )
 

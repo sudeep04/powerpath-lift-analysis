@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 import pytest
+from contract_utils import assert_metrics_contract, assert_overlay_contract
 from fastapi.testclient import TestClient
 
 from powerpath_engine.api import db
@@ -362,7 +363,9 @@ def test_cors_allows_ui_origin(client):
 
 
 def test_fake_engine_default_runner_writes_canned_artifacts(tmp_path, monkeypatch):
-    """The default runner in fake mode emits instant canned results (Task 12 E2E)."""
+    """The default runner in fake mode emits instant canned results (Task 12 E2E)
+    -- and those artifacts must match the FROZEN overlay/metrics contract, since
+    the player renders them exactly like real engine output."""
     monkeypatch.setenv("POWERPATH_FAKE_ENGINE", "1")
     out = tmp_path / "out"
     ctx = JobContext(
@@ -377,9 +380,47 @@ def test_fake_engine_default_runner_writes_canned_artifacts(tmp_path, monkeypatc
     stages: list[str] = []
     result = default_runner(ctx, lambda stage, pct: stages.append(stage))
     assert result.rep_count == 5
-    assert (out / "metrics.json").exists()
-    assert (out / "overlay.json").exists()
     assert stages == ["decode", "pose", "bar", "segment", "metrics"]
+
+    metrics = json.loads((out / "metrics.json").read_text())
+    overlay = json.loads((out / "overlay.json").read_text())
+    assert_metrics_contract(metrics)
+    assert_overlay_contract(overlay)
+    assert metrics["movement"] == "power_clean"
+    assert len(metrics["reps"]) >= 1
+    assert len(overlay["frames"]) >= 1
+
+
+def test_process_pool_fake_engine_end_to_end(tmp_path, monkeypatch):
+    """The REAL ProcessPoolExecutor path: no injected runner, so the app uses
+    the picklable default runner in a single-worker process pool (fake-engine
+    mode -- the env var is inherited by the spawned worker). Upload -> poll ->
+    DONE -> analysis + overlay retrievable and contract-valid, summary rows
+    persisted through the pool boundary."""
+    monkeypatch.setenv("POWERPATH_FAKE_ENGINE", "1")
+    app = create_app(library_dir=tmp_path)  # no engine_runner -> process pool
+    with TestClient(app) as client:
+        resp = _upload(client)
+        assert resp.status_code == 200
+        body = resp.json()
+
+        job = _poll(client, body["job_id"], timeout=30.0)  # allow subprocess spawn
+        assert job["state"] == "DONE"
+        assert job["progress"] == 100
+        assert job["error"] is None
+
+        analysis = client.get(f"/api/videos/{body['video_id']}/analysis")
+        overlay = client.get(f"/api/videos/{body['video_id']}/overlay")
+        assert analysis.status_code == 200 and overlay.status_code == 200
+        assert_metrics_contract(analysis.json())
+        assert_overlay_contract(overlay.json())
+        assert len(analysis.json()["reps"]) >= 1
+        assert len(overlay.json()["frames"]) >= 1
+
+        videos = client.get("/api/videos").json()
+        assert videos[0]["rep_count"] == 5
+        assert videos[0]["best_score"] == 92.0
+        assert videos[0]["job"]["state"] == "DONE"
 
 
 # --- schema / db sanity ---------------------------------------------------
