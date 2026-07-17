@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { VideoSummary } from "@/lib/api";
 import { StateChip } from "@/components/state-chip";
 
@@ -92,6 +93,12 @@ export function VideoCard({
               {video.best_score != null ? formatScore(video.best_score) : "—"}
             </p>
           </div>
+          <Link
+            href={`/video/${encodeURIComponent(video.video_id)}`}
+            className="ml-auto font-display text-xs font-semibold uppercase tracking-[0.14em] text-ink transition-colors hover:text-accent"
+          >
+            Analysis &rsaquo;
+          </Link>
         </div>
       )}
 
