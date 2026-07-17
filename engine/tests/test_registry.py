@@ -34,6 +34,18 @@ EXPECTED_KEYS = {
     "hang_power_clean",
 }
 
+# fault_rules per movement: only rules implemented in faults._FAULT_RULES and
+# detectable from the single-side-view camera premise (dropped names are noted
+# as v2 in each config module).
+EXPECTED_FAULT_RULES = {
+    "power_clean": ("early_arm_bend", "bar_drift", "catch_above_parallel"),
+    "hang_power_clean": ("early_arm_bend", "bar_drift", "catch_above_parallel"),
+    "power_snatch": ("early_arm_bend", "bar_drift", "no_lockout"),
+    "back_squat": ("squat_depth", "bar_drift"),
+    "push_press": ("early_press_out", "bar_drift", "no_lockout"),
+    "deadlift": ("bar_drift", "no_lockout"),
+}
+
 # min_disp_cm per family: 20 for squat/hinge, 40 for the explosive family.
 EXPECTED_MIN_DISP = {
     "power_clean": 40.0,
@@ -105,6 +117,11 @@ def test_comparison_landmarks_are_valid_landmark_names(config: MovementConfig) -
 @pytest.mark.parametrize("config", all_configs(), ids=lambda c: c.key)
 def test_min_disp_cm_matches_family_expectation(config: MovementConfig) -> None:
     assert config.min_disp_cm == EXPECTED_MIN_DISP[config.key]
+
+
+@pytest.mark.parametrize("config", all_configs(), ids=lambda c: c.key)
+def test_fault_rules_are_the_reconciled_side_view_vocabulary(config: MovementConfig) -> None:
+    assert config.fault_rules == EXPECTED_FAULT_RULES[config.key]
 
 
 def test_movement_config_rejects_bad_family() -> None:

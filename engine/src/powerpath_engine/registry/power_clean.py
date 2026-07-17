@@ -22,7 +22,8 @@ CONFIG = MovementConfig(
         PhaseDef(name="catch", detector="catch_rack"),
         PhaseDef(name="recovery", detector=""),
     ),
-    fault_rules=("early_arm_bend", "bar_loops_away", "no_triple_extension"),
+    # dropped: no_triple_extension (v2 / not single-side-view detectable)
+    fault_rules=("early_arm_bend", "bar_drift", "catch_above_parallel"),
     made_criteria=MadeCriteria(required_phases=("catch",)),
     comparison_landmarks=(
         "left_hip",

@@ -12,16 +12,15 @@ move (see the metrics module docstring).
 :func:`evaluate_faults` is the dispatcher: it walks ``config.fault_rules`` and
 runs each named rule through an explicit name->function table (never ``eval``).
 
-Registry note: the M1 movement configs (built in an earlier task) reference a
-richer, movement-specific fault vocabulary (``bar_loops_away``,
-``insufficient_depth``, ``knees_cave``, ``incomplete_lockout``, ...). Task 7
-implements the canonical rule set named in the task brief -- ``early_arm_bend``,
-``bar_drift``, ``squat_depth``, ``early_press_out``, ``catch_above_parallel``,
-``no_lockout`` -- as the ``_FAULT_RULES`` table below. Any config fault-rule name
-without an implementation here is skipped by :func:`evaluate_faults` (its
-implementation is a later task and the registry is not modified by Task 7), so
-each rule is validated directly in the tests. Bump :data:`RULES_VERSION` when a
-rule's threshold or logic changes so stored analyses stay comparable.
+Registry note: every M1 movement config names only rules implemented in the
+``_FAULT_RULES`` table below -- ``early_arm_bend``, ``bar_drift``,
+``squat_depth``, ``early_press_out``, ``catch_above_parallel``, ``no_lockout``.
+Faults that cannot be detected from the single-side-view camera premise (or
+that need signals not extracted yet -- ``knees_cave``, ``rounded_back``, ...)
+were dropped from the configs and are noted there as v2. Any config fault-rule
+name without an implementation here is skipped by :func:`evaluate_faults`. Bump
+:data:`RULES_VERSION` when a rule's threshold or logic changes so stored
+analyses stay comparable.
 """
 
 from __future__ import annotations

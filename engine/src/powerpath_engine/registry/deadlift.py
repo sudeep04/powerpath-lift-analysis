@@ -21,7 +21,8 @@ CONFIG = MovementConfig(
         PhaseDef(name="lockout", detector="lockout_top"),
         PhaseDef(name="descent", detector=""),
     ),
-    fault_rules=("rounded_back", "hips_shoot_up", "incomplete_lockout"),
+    # dropped: rounded_back, hips_shoot_up (need spine/hip-timing signals, v2)
+    fault_rules=("bar_drift", "no_lockout"),
     made_criteria=MadeCriteria(required_phases=("lockout",), min_lockout_angle_deg=165.0),
     comparison_landmarks=(
         "left_hip",

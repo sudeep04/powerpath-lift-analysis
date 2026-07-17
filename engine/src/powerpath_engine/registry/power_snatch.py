@@ -23,7 +23,8 @@ CONFIG = MovementConfig(
         PhaseDef(name="receive", detector="receive_overhead"),
         PhaseDef(name="recovery", detector=""),
     ),
-    fault_rules=("early_arm_bend", "bar_loops_away", "press_out", "no_triple_extension"),
+    # dropped: no_triple_extension (v2 / not single-side-view detectable)
+    fault_rules=("early_arm_bend", "bar_drift", "no_lockout"),
     made_criteria=MadeCriteria(required_phases=("receive",), min_lockout_angle_deg=160.0),
     comparison_landmarks=(
         "nose",

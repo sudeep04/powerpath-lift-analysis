@@ -220,18 +220,19 @@ def test_no_lockout_not_applicable_to_squat() -> None:
 # --- evaluate_faults dispatch ----------------------------------------------
 
 
-def test_evaluate_faults_runs_implemented_rules_and_skips_unknown() -> None:
-    # Real power_clean names early_arm_bend + two rules not implemented here.
+def test_evaluate_faults_runs_only_the_rules_the_rep_trips() -> None:
+    # Real power_clean names three implemented rules; a rep tripping only the
+    # arm bend yields exactly that finding.
     m = RepMetrics(elbow_angle_at_phase={"second_pull": 160.0}, bar_drift_cm=0.0)
     findings = evaluate_faults(m, CLEAN)
     assert [f.code for f in findings] == ["early_arm_bend"]
 
 
-def test_evaluate_faults_unknown_only_config_returns_empty() -> None:
-    # Real back_squat names only rules not implemented in Task 7 -> no findings,
-    # even though this rep would trip squat_depth if it were named.
+def test_back_squat_config_dispatches_squat_depth() -> None:
+    # The reconciled back_squat config names squat_depth, so a hip-above-knee
+    # bottom now produces a finding through the real registry config.
     m = RepMetrics(bottom_hip_y_cm=100.0, bottom_knee_y_cm=90.0)
-    assert evaluate_faults(m, SQUAT) == []
+    assert [f.code for f in evaluate_faults(m, SQUAT)] == ["squat_depth"]
 
 
 def test_evaluate_faults_dispatches_all_named_rules_in_order() -> None:

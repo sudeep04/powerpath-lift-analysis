@@ -22,7 +22,8 @@ CONFIG = MovementConfig(
         PhaseDef(name="lockout", detector="lockout_top"),
         PhaseDef(name="standing", detector=""),
     ),
-    fault_rules=("shallow_dip", "press_forward", "incomplete_lockout"),
+    # dropped: shallow_dip (v2)
+    fault_rules=("early_press_out", "bar_drift", "no_lockout"),
     made_criteria=MadeCriteria(required_phases=("lockout",), min_lockout_angle_deg=160.0),
     comparison_landmarks=(
         "left_shoulder",

@@ -20,7 +20,9 @@ CONFIG = MovementConfig(
         PhaseDef(name="ascent", detector=""),
         PhaseDef(name="standing", detector=""),
     ),
-    fault_rules=("insufficient_depth", "knees_cave", "heels_rise", "excessive_forward_lean"),
+    # dropped: knees_cave, heels_rise (frontal/foot plane, not single-side-view
+    # detectable); excessive_forward_lean (v2)
+    fault_rules=("squat_depth", "bar_drift"),
     made_criteria=MadeCriteria(
         required_phases=("bottom", "standing"),
         max_bottom_knee_angle_deg=90.0,
