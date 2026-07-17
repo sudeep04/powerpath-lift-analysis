@@ -13,6 +13,7 @@ from __future__ import annotations
 import synthetic
 
 from powerpath_engine import registry
+from powerpath_engine.faults import FaultFinding
 from powerpath_engine.geometry import PlaneScale
 from powerpath_engine.metrics import RepMetrics, compute_rep_metrics
 from powerpath_engine.phases import detect_phases
@@ -48,8 +49,19 @@ class FakeHistory:
         return list(self.velocities)
 
 
-def _faults(n: int) -> list:
-    return [f"fault{i}" for i in range(n)]
+def _finding(code: str, severity: str = "fault") -> FaultFinding:
+    return FaultFinding(
+        code=code,
+        message="test finding",
+        phase=None,
+        value=None,
+        threshold=None,
+        severity=severity,  # type: ignore[arg-type]
+    )
+
+
+def _faults(n: int) -> list[FaultFinding]:
+    return [_finding(f"fault{i}") for i in range(n)]
 
 
 # --- is_made: pure decision core -------------------------------------------
@@ -211,6 +223,27 @@ def test_each_fault_costs_seven_with_a_floor_of_zero() -> None:
     assert two.fault_component == 6.0  # 20 - 2*7
     many = score_rep(m, _faults(4), made=True, history=FakeHistory([]), load_kg=50.0)
     assert many.fault_component == 0.0  # floored, not negative
+
+
+def test_informational_finding_is_not_penalized() -> None:
+    # A rep whose only finding is the informational catch_above_parallel
+    # scores exactly as if it were fault-free.
+    m = RepMetrics(smoothness_normalized_jerk=0.0, path_length_ratio=1.0)
+    info_only = [_finding("catch_above_parallel", severity="informational")]
+    s = score_rep(m, info_only, made=True, history=FakeHistory([]), load_kg=50.0)
+    clean = score_rep(m, [], made=True, history=FakeHistory([]), load_kg=50.0)
+    assert s.fault_component == 20.0
+    assert s.score == clean.score == 100.0
+
+
+def test_real_fault_still_costs_seven_alongside_informational() -> None:
+    m = RepMetrics(smoothness_normalized_jerk=0.0, path_length_ratio=1.0)
+    mixed = [
+        _finding("catch_above_parallel", severity="informational"),
+        _finding("bar_drift"),
+    ]
+    s = score_rep(m, mixed, made=True, history=FakeHistory([]), load_kg=50.0)
+    assert s.fault_component == 13.0  # 20 - 1*7; the informational one is free
 
 
 def test_terrible_rep_scores_near_zero_and_is_clamped() -> None:

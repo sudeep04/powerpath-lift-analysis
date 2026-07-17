@@ -26,6 +26,7 @@ analyses stay comparable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from powerpath_engine.metrics import PULL_PHASES, RepMetrics
 from powerpath_engine.registry import MovementConfig
@@ -73,6 +74,10 @@ class FaultFinding:
         value: The measured value that tripped the rule, or ``None`` if the
             rule is not a simple numeric comparison.
         threshold: The threshold ``value`` was compared against, or ``None``.
+        severity: ``"fault"`` for a form error that costs score points;
+            ``"informational"`` for a finding that is surfaced but never
+            penalized (e.g. ``catch_above_parallel`` -- the rep became a
+            different movement, not a form error).
     """
 
     code: str
@@ -80,6 +85,7 @@ class FaultFinding:
     phase: str | None
     value: float | None
     threshold: float | None
+    severity: Literal["fault", "informational"] = "fault"
 
 
 def early_arm_bend(metrics: RepMetrics, config: MovementConfig) -> FaultFinding | None:
@@ -179,6 +185,7 @@ def catch_above_parallel(metrics: RepMetrics, config: MovementConfig) -> FaultFi
             phase=phase,
             value=hip,
             threshold=CATCH_ABOVE_PARALLEL_HIP_DEG,
+            severity="informational",
         )
     return None
 

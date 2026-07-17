@@ -14,6 +14,7 @@ from powerpath_engine import registry
 from powerpath_engine.faults import (
     BAR_DRIFT_ENVELOPE_CM,
     RULES_VERSION,
+    FaultFinding,
     bar_drift,
     catch_above_parallel,
     early_arm_bend,
@@ -155,6 +156,28 @@ def test_catch_above_parallel_uses_receive_phase_for_snatch() -> None:
 
 def test_catch_above_parallel_silent_on_upright_catch() -> None:
     assert catch_above_parallel(RepMetrics(hip_angle_at_phase={"catch": 120.0}), CLEAN) is None
+
+
+# --- severity ----------------------------------------------------------------
+
+
+def test_catch_above_parallel_finding_is_informational() -> None:
+    # The brief calls this informational: the rep became a squat rep, which is
+    # worth surfacing but is not a form error to penalize.
+    f = catch_above_parallel(RepMetrics(hip_angle_at_phase={"catch": 80.0}), CLEAN)
+    assert f is not None and f.severity == "informational"
+
+
+def test_other_findings_default_to_fault_severity() -> None:
+    drift = bar_drift(RepMetrics(bar_drift_cm=9.0), CLEAN)
+    assert drift is not None and drift.severity == "fault"
+    bend = early_arm_bend(RepMetrics(elbow_angle_at_phase={"second_pull": 150.0}), CLEAN)
+    assert bend is not None and bend.severity == "fault"
+
+
+def test_fault_finding_severity_defaults_to_fault() -> None:
+    f = FaultFinding(code="x", message="m", phase=None, value=None, threshold=None)
+    assert f.severity == "fault"
 
 
 # --- no_lockout ------------------------------------------------------------

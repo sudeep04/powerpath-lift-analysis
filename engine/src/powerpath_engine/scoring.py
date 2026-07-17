@@ -25,8 +25,10 @@ Two steps sit on top of :mod:`~powerpath_engine.metrics` and
    * ``velocity`` compares this rep's peak concentric velocity to the athlete's
      own history at +/-10% load (via the :class:`VelocityHistory` protocol);
      full credit once the rep matches or beats the median of that history.
-   * ``faults`` starts at 20 and loses :data:`FAULT_PENALTY` (7) per finding,
-     floored at 0.
+   * ``faults`` starts at 20 and loses :data:`FAULT_PENALTY` (7) per finding
+     whose severity is not ``"informational"``, floored at 0. Informational
+     findings (e.g. ``catch_above_parallel``) are surfaced but never cost
+     points.
 
    **Velocity redistribution:** with fewer than :data:`MIN_HISTORY_REPS` (5)
    history reps at +/-10% load there is no trustworthy velocity baseline, so the
@@ -47,6 +49,7 @@ from typing import Protocol
 
 import numpy as np
 
+from powerpath_engine.faults import FaultFinding
 from powerpath_engine.metrics import RepMetrics
 from powerpath_engine.registry import MovementConfig
 from powerpath_engine.segmentation import V_FREEFALL_CMS, RepWindow
@@ -261,7 +264,7 @@ def _missed_score() -> RepScore:
 
 def score_rep(
     metrics: RepMetrics,
-    faults: list,
+    faults: list[FaultFinding],
     made: bool,
     history: VelocityHistory,
     load_kg: float,
@@ -269,7 +272,8 @@ def score_rep(
     """Score one rep 0-100 (made reps only); see the module docstring for the formula.
 
     ``faults`` is the finding list from
-    :func:`~powerpath_engine.faults.evaluate_faults`; only its length matters.
+    :func:`~powerpath_engine.faults.evaluate_faults`; only the count of
+    non-informational findings matters (informational findings are free).
     A missed rep (``made`` is False) is returned unscored and excluded from
     templates.
     """
@@ -278,7 +282,8 @@ def score_rep(
 
     sm_frac = _smoothness_fraction(metrics.smoothness_normalized_jerk)
     path_frac = _path_fraction(metrics.path_length_ratio)
-    fault_component = max(0.0, FAULTS_MAX - FAULT_PENALTY * len(faults))
+    penalized = sum(1 for f in faults if f.severity != "informational")
+    fault_component = max(0.0, FAULTS_MAX - FAULT_PENALTY * penalized)
 
     velocities = history.peak_velocities_near_load(load_kg, VELOCITY_LOAD_TOLERANCE)
     if len(velocities) >= MIN_HISTORY_REPS:
