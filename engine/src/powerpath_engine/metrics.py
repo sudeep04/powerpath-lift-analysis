@@ -16,9 +16,10 @@ the bar ``TimeSeries`` and the ``LandmarkSeries`` handed to
 :func:`compute_rep_metrics` are both **y-up** (larger ``y`` is physically
 higher) and share a common time grid. The bar series is already calibrated to
 centimeters; the ``scale`` argument is the bar-plane :class:`PlaneScale` and is
-applied only through :func:`geometry.horizontal_deviation_cm` so that this
-module never touches a raw scale factor directly (the geometry-owns-conversions
-constraint). When the bar series is already in cm -- as it is throughout the
+applied only through :meth:`geometry.PlaneScale.px_to_cm` and
+:func:`geometry.horizontal_deviation_cm` so that this module never touches a
+raw scale factor directly (the geometry-owns-conversions constraint). When the
+bar series is already in cm -- as it is throughout the
 calibrated pipeline and in the fixtures -- the caller passes an identity
 ``PlaneScale(cm_per_px=1.0)``; a px-valued caller would pass the real bar-plane
 scale instead. Angles are read via :func:`geometry.joint_angle`.
@@ -340,8 +341,8 @@ def compute_rep_metrics(
     t = smoothed.ts()
     x = smoothed.xs()
     y = smoothed.ys()
-    x_cm = x * scale.cm_per_px
-    y_cm = y * scale.cm_per_px
+    x_cm = scale.px_to_cm(x)
+    y_cm = scale.px_to_cm(y)
 
     bar_drift = _bar_drift_cm(x, scale)
     peak_v = _peak_concentric_velocity_ms(t, y_cm)
