@@ -1,6 +1,6 @@
 /**
  * Schema-valid overlay.json + metrics.json sample in the FROZEN contract
- * shape (.superpowers/sdd/overlay-metrics-contract.md). Shared by the Vitest
+ * shape (docs/contracts/overlay-metrics-contract.md). Shared by the Vitest
  * component tests and the Playwright E2E so both render the same document:
  * 5 reps — three made, one missed, one unanalyzed — with frames that include
  * null bar / null skeleton entries to exercise graceful degradation.
@@ -166,7 +166,15 @@ export const ANALYSIS_FIXTURE: AnalysisDoc = {
             knee_angle_at_phase: { knee_pass: 142.0 },
             elbow_angle_at_phase: { catch: 68.0 },
           },
-    faults: rep.faults,
+    // metrics.json faults are the 5-key shape (NO severity); only overlay
+    // faults carry severity. Mirror what the engine actually writes.
+    faults: rep.faults.map((f) => ({
+      code: f.code,
+      message: f.message,
+      phase: f.phase,
+      value: f.value,
+      threshold: f.threshold,
+    })),
     phases: rep.phases,
   })),
 };

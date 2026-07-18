@@ -154,4 +154,50 @@ describe("Player", () => {
       screen.getByText(/bar drifts 4\.2cm forward at the knee/i),
     ).toBeInTheDocument();
   });
+
+  it("renders an informational fault muted, not as a warn/fail fault", async () => {
+    const user = userEvent.setup();
+    render(<Player videoId="vid-1" />);
+    const cards = await screen.findAllByTestId("rep-card");
+    // Rep 4 (index 3) carries the informational `slow_turnover` finding.
+    await user.click(cards[3]);
+    const msg = screen.getByText(/turnover slightly slower/i);
+    // The fix: the panel sources faults from the overlay rep (which carries
+    // `severity`), so this renders muted. If it read the metrics-doc faults
+    // (no severity), it would fall through to text-warn.
+    expect(msg).toHaveClass("text-muted");
+    expect(msg).not.toHaveClass("text-warn");
+  });
+
+  it("surfaces a calibration warning banner when the analysis carries one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/overlay")) return jsonResponse(OVERLAY_FIXTURE);
+        if (url.endsWith("/analysis")) {
+          return jsonResponse({
+            ...ANALYSIS_FIXTURE,
+            calibration: {
+              source: "date_fallback",
+              bar_scale_cm_per_px: 0.25,
+              warning: "No full plate detected; using the day's saved scale.",
+            },
+          });
+        }
+        return jsonResponse({ detail: "not found" }, 404);
+      }),
+    );
+    render(<Player videoId="vid-1" />);
+    await screen.findAllByTestId("rep-card");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/no full plate detected/i);
+  });
+
+  it("shows no calibration banner when the warning is null", async () => {
+    render(<Player videoId="vid-1" />);
+    await screen.findAllByTestId("rep-card");
+    // Default fixture has calibration.warning === null.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

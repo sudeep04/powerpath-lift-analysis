@@ -1,6 +1,6 @@
 /**
  * Types + lookup/scaling helpers for overlay.json and metrics.json
- * (frozen contract: .superpowers/sdd/overlay-metrics-contract.md).
+ * (frozen contract: docs/contracts/overlay-metrics-contract.md).
  *
  * All times are PTS seconds (float). `bar`/`skeleton`/`bar_path` coordinates
  * are IMAGE pixels (y-down, as the video renders) — the UI scales them to the

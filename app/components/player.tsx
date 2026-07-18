@@ -234,6 +234,16 @@ export function Player({ videoId }: { videoId: string }) {
         </p>
       </header>
 
+      {analysis?.calibration?.warning != null && (
+        <p
+          role="alert"
+          className="pp-cut mt-4 border border-warn/60 bg-surface px-4 py-3 font-mono text-xs leading-relaxed text-warn"
+        >
+          <span className="uppercase tracking-[0.14em]">Calibration</span>{" "}
+          &middot; {analysis.calibration.warning}
+        </p>
+      )}
+
       <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* Video + overlay canvas */}
         <div

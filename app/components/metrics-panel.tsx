@@ -71,7 +71,12 @@ export function MetricsPanel({
   analysisRep: AnalysisRep | null;
   onSeek: (t: number) => void;
 }) {
-  const faults = analysisRep?.faults ?? rep.faults;
+  // Faults come from the OVERLAY rep, not the metrics doc: the engine
+  // serializes the identical FaultFinding list into both files, but only the
+  // overlay shape carries `severity` (metrics.json faults are the 5-key
+  // shape). Sourcing from `analysisRep.faults` would drop severity and render
+  // informational faults (e.g. catch_above_parallel) as real warn/fail faults.
+  const faults = rep.faults;
   const phases = Object.entries(analysisRep?.phases ?? rep.phases).sort(
     (a, b) => a[1] - b[1],
   );
