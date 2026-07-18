@@ -27,8 +27,16 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable
-from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import (
+    CancelledError,
+    Executor,
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+)
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,7 +101,7 @@ def _write_canned_artifacts(ctx: JobContext) -> RunnerResult:
     stack -- upload, poll, player -- can be exercised end to end (Task 12's
     Playwright E2E renders a real overlay from this) with no model inference
     and no real decoding. Both payloads follow
-    ``.superpowers/sdd/overlay-metrics-contract.md`` exactly, same as the
+    ``docs/contracts/overlay-metrics-contract.md`` exactly, same as the
     real writers in ``powerpath_engine.overlay`` (the engine tests validate
     this file's output against the shared contract assertions).
     """
@@ -319,14 +327,18 @@ class JobManager:
         self._use_process_pool = use_process_pool
         self._executor: Executor | None = None
         self._futures: list[Future[None]] = []
+        self._lock = threading.Lock()
 
     def start(self) -> None:
-        if self._executor is not None:
-            return
+        with self._lock:
+            if self._executor is not None:
+                return
+            self._executor = self._new_executor()
+
+    def _new_executor(self) -> Executor:
         if self._use_process_pool:
-            self._executor = ProcessPoolExecutor(max_workers=1)
-        else:
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ppjob")
+            return ProcessPoolExecutor(max_workers=1)
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="ppjob")
 
     def submit(self, ctx: JobContext) -> None:
         if self._executor is None:
@@ -334,9 +346,52 @@ class JobManager:
         # Prune completed futures so the list does not grow unbounded.
         self._futures = [f for f in self._futures if not f.done()]
         future = self._executor.submit(_execute_job, self._runner, self._db_path, ctx)
+        # Observe the future: _execute_job records its own outcome and returns
+        # None normally, so a non-None exception here means the worker died HARD
+        # (a native segfault/OOM in cv2/av/onnxruntime crashes the child and
+        # surfaces as BrokenProcessPool) before it could mark the job. Without
+        # this, the job stays RUNNING forever (the UI polls indefinitely, the
+        # FAILED+retry path never fires) and a broken ProcessPool 500s every
+        # later upload.
+        future.add_done_callback(lambda f: self._on_future_done(f, ctx))
         self._futures.append(future)
 
+    def _on_future_done(self, future: Future[None], ctx: JobContext) -> None:
+        try:
+            exc = future.exception()
+        except CancelledError:
+            exc = RuntimeError("job cancelled")
+        if exc is None:
+            return
+        self._fail_job(ctx.job_id, f"worker crashed: {type(exc).__name__}: {exc}")
+        if isinstance(exc, BrokenProcessPool):
+            self._rebuild_pool()
+
+    def _fail_job(self, job_id: str, error: str) -> None:
+        # Runs on the executor's callback thread -> fresh connection. Only
+        # overwrite a still-live job so we never clobber a real DONE/FAILED.
+        conn = db.connect(self._db_path)
+        try:
+            row = db.get_job(conn, job_id)
+            if row is not None and row["state"] not in ("DONE", "FAILED"):
+                db.mark_job_failed(conn, job_id, error)
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    def _rebuild_pool(self) -> None:
+        with self._lock:
+            old, self._executor = self._executor, None
+            if old is not None:
+                try:
+                    old.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
+            self._executor = self._new_executor()
+
     def shutdown(self, wait: bool = False) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=wait, cancel_futures=not wait)
-            self._executor = None
+        with self._lock:
+            if self._executor is not None:
+                self._executor.shutdown(wait=wait, cancel_futures=not wait)
+                self._executor = None

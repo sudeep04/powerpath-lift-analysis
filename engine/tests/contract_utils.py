@@ -1,6 +1,6 @@
 """Assertions for the FROZEN overlay.json / metrics.json contracts.
 
-One place encodes `.superpowers/sdd/overlay-metrics-contract.md` as
+One place encodes `docs/contracts/overlay-metrics-contract.md` as
 executable checks so every producer test (overlay writer unit tests, the
 sample-video E2E, the API process-pool integration test and the fake-engine
 runner) validates against the identical shape. Key sets are compared with

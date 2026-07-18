@@ -1,7 +1,7 @@
 """Serialize an AnalysisResult to the FROZEN JSON contracts + annotated mp4.
 
 The two JSON writers here produce EXACTLY the shapes frozen in
-``.superpowers/sdd/overlay-metrics-contract.md`` (the interface Task 10
+``docs/contracts/overlay-metrics-contract.md`` (the interface Task 10
 serves verbatim from disk and Task 12's player renders):
 
 * ``metrics.json`` -- the full analysis record: video meta, movement,

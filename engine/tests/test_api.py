@@ -241,6 +241,95 @@ def test_restart_requeues_orphaned_running_job(tmp_path):
     assert row["stage"] is None
 
 
+# --- worker crash handling (hard child crash / BrokenProcessPool) ---------
+
+
+def _job_manager_with_running_job(tmp_path):
+    from concurrent.futures.process import BrokenProcessPool  # noqa: F401
+
+    from powerpath_engine.api.jobs import JobContext, JobManager
+
+    storage = Storage(tmp_path)
+    db_path = storage.db_path()
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    dir_path = storage.video_dir("v1", "2026-07-12")
+    dir_path.mkdir(parents=True, exist_ok=True)
+    db.create_video(
+        conn,
+        video_id="v1",
+        movement="back_squat",
+        load_kg=100.0,
+        recalibrate=False,
+        original_name="x.mp4",
+        ext=".mp4",
+        dir_path=str(dir_path),
+        file_path=str(dir_path / "original.mp4"),
+    )
+    job_id = db.create_job(conn, "v1")
+    db.mark_job_running(conn, job_id, pid=999_999)
+    conn.close()
+    mgr = JobManager(db_path, make_fake_runner(), use_process_pool=False)
+    ctx = JobContext(
+        job_id=job_id,
+        video_id="v1",
+        movement="back_squat",
+        load_kg=100.0,
+        recalibrate=False,
+        video_path=str(dir_path / "original.mp4"),
+        output_dir=str(dir_path),
+    )
+    return mgr, ctx, db_path, job_id
+
+
+def _job_state(db_path, job_id):
+    conn = db.connect(db_path)
+    try:
+        return db.get_job(conn, job_id)["state"]
+    finally:
+        conn.close()
+
+
+def test_hard_worker_crash_marks_job_failed(tmp_path):
+    """A future that resolves to an exception (native child crash) -> job FAILED."""
+    from concurrent.futures import Future
+
+    mgr, ctx, db_path, job_id = _job_manager_with_running_job(tmp_path)
+    fut: Future = Future()
+    fut.set_exception(RuntimeError("segfault-ish child death"))
+    mgr._on_future_done(fut, ctx)
+    assert _job_state(db_path, job_id) == "FAILED"
+
+
+def test_crash_callback_does_not_overwrite_terminal_job(tmp_path):
+    from concurrent.futures import Future
+
+    mgr, ctx, db_path, job_id = _job_manager_with_running_job(tmp_path)
+    conn = db.connect(db_path)
+    db.mark_job_done(conn, job_id)
+    conn.close()
+    fut: Future = Future()
+    fut.set_exception(RuntimeError("late crash"))
+    mgr._on_future_done(fut, ctx)
+    assert _job_state(db_path, job_id) == "DONE"  # not clobbered
+
+
+def test_broken_process_pool_is_rebuilt(tmp_path):
+    from concurrent.futures import Future
+    from concurrent.futures.process import BrokenProcessPool
+
+    mgr, ctx, db_path, job_id = _job_manager_with_running_job(tmp_path)
+    mgr.start()
+    old_executor = mgr._executor
+    fut: Future = Future()
+    fut.set_exception(BrokenProcessPool("pool died"))
+    mgr._on_future_done(fut, ctx)
+    assert _job_state(db_path, job_id) == "FAILED"
+    assert mgr._executor is not None
+    assert mgr._executor is not old_executor  # fresh pool so later uploads work
+    mgr.shutdown()
+
+
 # --- DELETE removes rows + files ------------------------------------------
 
 
