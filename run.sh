@@ -11,9 +11,11 @@ set -m # job control: each background job gets its own process group,
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 API_URL="http://127.0.0.1:8400/api/movements"
-APP_URL="http://localhost:3000" # localhost, NOT 127.0.0.1 -- Next dev blocks
-                                # cross-origin dev resources from 127.0.0.1 and
-                                # hydration silently fails.
+# The app is opened via localhost, NOT 127.0.0.1 -- Next dev blocks cross-origin
+# dev resources from 127.0.0.1 and hydration silently fails. The PORT is not
+# assumed: if 3000 is taken by another app, Next silently falls back to 3001+,
+# so we scan for the port actually serving PowerPath (see wait_for_app).
+APP_URL="" # resolved by wait_for_app
 API_PID=""
 APP_PID=""
 
@@ -65,7 +67,7 @@ echo "==> Starting analysis API (uv run powerpath-api) on 127.0.0.1:8400"
 (cd "$ROOT/engine" && exec uv run powerpath-api) &
 API_PID=$!
 
-echo "==> Starting web app (npm run dev) on localhost:3000"
+echo "==> Starting web app (npm run dev) on localhost:3000 (or the next free port)"
 (cd "$ROOT/app" && exec npm run dev) &
 APP_PID=$!
 
@@ -88,8 +90,37 @@ wait_for() {
   return 1
 }
 
+# Find the port that is actually serving POWERPATH (not just any app): if 3000
+# is occupied (e.g. another dev server), Next silently falls back to 3001+, and
+# a bare port probe would "succeed" against the wrong app.
+wait_for_app() {
+  local deadline=$((SECONDS + 45))
+  while ((SECONDS < deadline)); do
+    for port in 3000 3001 3002 3003 3004 3005; do
+      local url="http://localhost:${port}"
+      if curl -sf --max-time 2 "$url" 2>/dev/null | grep -qi "powerpath"; then
+        APP_URL="$url"
+        echo "==> Web app is up ($APP_URL)"
+        if [[ "$port" != "3000" ]]; then
+          echo "    (port 3000 was taken; Next.js fell back to $port. The API"
+          echo "     allows localhost:3000/3001 by default -- for other ports set"
+          echo "     POWERPATH_CORS_ORIGINS=http://localhost:${port} and re-run.)"
+        fi
+        return 0
+      fi
+    done
+    if ! kill -0 "$APP_PID" 2>/dev/null; then
+      echo "ERROR: web app exited before it came up -- see the log output above." >&2
+      return 1
+    fi
+    sleep 1
+  done
+  echo "ERROR: no port in 3000-3005 served PowerPath within 45s." >&2
+  return 1
+}
+
 wait_for "API" "$API_URL" "$API_PID"
-wait_for "Web app" "$APP_URL" "$APP_PID"
+wait_for_app
 
 # --------------------------------------------------------------------- open --
 echo "==> Opening $APP_URL"

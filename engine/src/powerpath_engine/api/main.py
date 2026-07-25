@@ -25,8 +25,17 @@ from powerpath_engine.api import db
 from powerpath_engine.api.jobs import JobContext, JobManager, Runner, default_runner
 from powerpath_engine.api.storage import Storage, resolve_library_dir
 
-# Only the UI dev server may call the API from a browser.
-_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+# Only the UI dev server may call the API from a browser. Defaults cover the
+# Next dev server on 3000 and its 3001 fallback (when 3000 is already taken);
+# override with POWERPATH_CORS_ORIGINS (comma-separated) if it lands elsewhere.
+_DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+)
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("POWERPATH_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if o.strip()
+]
 
 _MEDIA_TYPES = {
     ".mp4": "video/mp4",
