@@ -8,3 +8,8 @@ node_modules/
 *.pyc
 dist/
 .ruff_cache/
+.claude/
+downloads/
+# generated demo clips (regenerate: engine/tests/make_samples.py) — keep the explainer
+samples/*
+!samples/README.md
